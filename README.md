@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 8 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 1 — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp`.
+**Current slice:** Slice 1 — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp`. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -23,7 +23,7 @@ src/xsensai/         Python package (importable as `xsensai`)
 commands/            Slash command source files (xfind.md, xhelp.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (75 unit + 7 integration tests)
+tests/               pytest suite (77 tests: 75 always-on + 2 integration-gated)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
   fixtures/qmd_query_output.json   QMD JSON-output schema contract fixture

@@ -14,8 +14,10 @@ See `SLICE_0_PLAN.md` (and successive `SLICE_N_PLAN.md` files). The Slice 1 plan
 
 ## Build sequence
 
-1. **Slice 0** — spikes + skeleton + `ping` smoke + `errors.py`. **Shipped.**
-2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Current.**
+Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
+
+1. **Slice 0** — spikes + skeleton + `ping` smoke + `errors.py`. **Shipped (v0.1.0).**
+2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Shipped (v0.2.0.0).**
 3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`.
 4. **Slice 3** — `/xask` + last30days web fork + synthesis + LLM re-rank.
 5. **Slice 4** — XDK sync + `/xsync`.
