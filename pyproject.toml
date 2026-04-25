@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xsensai"
-version = "0.1.0"
+version = "0.2.0.0"
 description = "Personal X bookmark retrieval skill - MCP server + slash commands for Claude"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -15,19 +15,24 @@ dependencies = [
     "mcp>=1.0",
     "pydantic>=2.0",
     "pyyaml>=6.0",
+    "python-frontmatter>=1.1",
+    "regex>=2024.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    "pytest-asyncio>=0.24",
 ]
 
 [project.scripts]
 xsensai-mcp = "xsensai.mcp_server.__main__:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+xsensai-eval-history = "xsensai.cli.eval_history:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+where = ["src"]
