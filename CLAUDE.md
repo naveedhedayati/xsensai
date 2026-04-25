@@ -69,3 +69,28 @@ Override fuzzy match: if you say "no recency" or "no pins", `/xfind` will note t
 ## Vault layout (off-repo)
 
 The corpus lives in `/Users/naveedhedayati/Documents/Vault/04_areas/x-bookmarks/` (private GitHub repo, git-synced). This project repo only contains code; cards live in the vault repo.
+
+## Deploy Configuration (configured by /setup-deploy)
+
+- **Platform:** local-install (Python package + MCP server + Claude Code slash commands)
+- **Production URL:** N/A — runs in user's local Claude Desktop / Claude Code
+- **Deploy workflow:** none (manual install post-merge)
+- **Deploy trigger:** manual — run `./scripts/install_commands.sh` after merging
+  (bootstraps QMD `xsensai-cards` collection + copies `commands/*.md` to `~/.claude/commands/`)
+- **Deploy status command:** `pytest` (CI-verified) + manual `/xfind` smoke in Claude Code
+- **Merge method:** squash (default)
+- **Project type:** Python library + MCP server + Claude Code slash commands
+
+### Custom deploy hooks
+
+- **Pre-merge:** `pytest` (CI runs on every push; gated on PR before merge)
+- **Deploy trigger:** `./scripts/install_commands.sh` (manual, post-merge, per-machine)
+- **Deploy status:** MCP `tools/list` returns `search_bookmarks` + `get_bookmark` + `ping`
+- **Health check:** `XSENSAI_RUN_INTEGRATION=1 pytest tests/eval/golden_set.py` (top-3 ≥ 80%)
+- **Post-deploy verification:** in Claude Code, type `/xfind` and confirm a query returns hits
+
+### Future deploy work (informational; not yet active)
+
+- **Slice 5:** GitHub Actions cron (`.github/workflows/sync.yml`) syncs new bookmarks every 2-3 days. When this lands, this section moves up to active config and the cron's last-success timestamp becomes a real deploy-status signal.
+- **Slice 6:** `scripts/setup.sh` setup wizard automates first-time install (currently a stub).
+- **Post-Slice-6:** optional PyPI publish workflow on git tag (`pip install xsensai` distribution).
