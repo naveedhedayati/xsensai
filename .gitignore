@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Project-local secrets (never committed)
+.env
+.env.*
+!.env.example
+
+# Vault-side runtime files (not part of this repo, listed for reference)
+# 04_areas/x-bookmarks/_index-errors.md
+# 04_areas/x-bookmarks/_sync-checkpoint.jsonl
+# 04_areas/x-bookmarks/_conflicts.md
+# 04_areas/x-bookmarks/.lock
