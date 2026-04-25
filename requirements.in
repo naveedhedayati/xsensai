@@ -8,5 +8,10 @@ mcp>=1.0
 pydantic>=2.0
 pyyaml>=6.0
 
+# Slice 1: card model + retrieval
+python-frontmatter>=1.1
+regex>=2024.0
+
 # Test
 pytest>=8.0
+pytest-asyncio>=0.24

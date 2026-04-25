@@ -1,0 +1,8 @@
+Sample Python:
+
+```python
+def foo():
+    return 42
+```
+
+End of code block.

@@ -44,6 +44,7 @@ ErrorCode = Literal[
     # Retrieval / fallback
     "FALLBACK_FIRED",
     "NO_RESULTS",
+    "CORPUS_UNAVAILABLE",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
@@ -51,7 +52,11 @@ ErrorCode = Literal[
 _VALID_CODES = frozenset(get_args(ErrorCode))
 
 
-@dataclass(frozen=True)
+# Not frozen: Python's exception machinery mutates __traceback__ / __cause__ /
+# __notes__ during raise/except/contextlib teardown. A frozen dataclass that
+# inherits from Exception triggers FrozenInstanceError in async fixture teardown.
+# Slice 1 caught this in test_async_concurrency. Don't freeze exception dataclasses.
+@dataclass
 class XSensaiError(Exception):
     """A user-visible error following the spec's error contract.
 
