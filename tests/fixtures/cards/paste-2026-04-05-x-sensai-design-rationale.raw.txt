@@ -1,0 +1,1 @@
+Why x-sensai exists: the user's curated bookmarks should shape Claude's reasoning, not the mean of the web.

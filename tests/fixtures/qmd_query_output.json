@@ -1,0 +1,9 @@
+[
+  {
+    "docid": "#2dba82",
+    "score": 1,
+    "file": "qmd://spike-test/sample.md",
+    "title": "Why startups fail",
+    "snippet": "@@ -4,4 @@ (3 before, 1 after)\n---\n# Why startups fail\nMost startups fail because they don't make something people want.\nThe best ideas come from working on real problems."
+  }
+]
