@@ -2,6 +2,114 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.4.0.0] - 2026-04-26
+
+Slice 3 — `/xask` ships. After this release, you can ask grounded questions
+of your bookmark corpus, optionally cross-checked against this week's web,
+with deterministic citations back to the cards. Synthesis happens in the
+host Claude Code session (no server-side LLM dep, no API keys, no cost
+accounting needed for /xask itself).
+
+### Added
+
+- **`/xask` slash command**: one-prompt thinking session. "What's your
+  question?" + inline overrides (`no decay`, `skip pins`, `no web`,
+  `challenge`). Output uses the locked template (`## From your corpus`,
+  optional `## Internal tension`, optional `## Web this week`,
+  `## Synthesis`, `## References` with `[B]`/`[P]` citations).
+- **`xsensai.xask.service`**: thin Python orchestrator. Deterministic
+  top-3 re-rank via stable sort `(combined_score DESC, captured DESC, id
+  ASC)`. Real asyncio parallelism — web fork + retrieval overlap, end-to-
+  end latency is `max(retrieval, web)` not sum. Branch table covers
+  empty corpus, NO_CORPUS_MATCH, web miss/empty/parse/timeout, challenge
+  no-real-dissent.
+- **`xsensai.web_fork.last30days_runner`**: subprocess wrapper for the
+  external `last30days` Claude Code skill. Env-scrubbed (no Anthropic /
+  X tokens leak), executable-path validated (rejects executables not
+  owned by the user), 20s soft deadline, well-formed status outcomes.
+- **`xsensai.synthesis.template`**: locked output-template constant +
+  structural validator. CLI: `python -m xsensai.synthesis.template
+  validate`. The slash command pipes its draft through this before emit;
+  invalid drafts get one stricter re-prompt, then emit raw with banner.
+- **`xsensai.xask.log`**: privacy-aware JSONL question log
+  (`~/.cache/xsensai/xask-log.jsonl`). Default mode `hash_only` strips
+  question text — only `q_hash` + meta logged. `XSENSAI_XASK_LOG_MODE=full`
+  opts in to text logging. `python -m xsensai.xask.log purge` honors
+  `XSENSAI_XASK_LOG_RETENTION_DAYS` (default 90). File mode 0600, dir 0700.
+  Schema includes `prompt_template_version` + `service_version` +
+  `output_sha256` for bisect.
+- **`xsensai.errors.XSensaiInfo`** (sibling of `XSensaiError`): structured
+  envelope for non-error status lines (web miss, no_results, challenge
+  dup) so branch outcomes stay contract-compliant. Renders as
+  `[INFO/CODE] {cause}\n{action_or_note}\nSource: {source}`.
+- **3 new error codes**: `WEB_FORK_FAILED`, `EMPTY_CORPUS`,
+  `TEMPLATE_VALIDATION_FAILED`. **5 new info codes**: `NO_CORPUS_MATCH`,
+  `WEB_NO_FRESH`, `WEB_TIMEOUT`, `WEB_PARSE`, `CHALLENGE_NO_DISSENT`.
+- **`xask_capabilities()` MCP tool** (read-only): deploy-status helper
+  exposing `{ok, version, prompt_template_version, web_fork_available,
+  web_fork_path, log_path, log_mode}`. Restores the MCP `tools/list`
+  health signal that the Slice 3 reshape would otherwise have eliminated.
+- **5 prompt-injection adversarial fixtures**:
+  `tests/fixtures/prompt_injection/injection_in_{body,author,why_saved,source_url,tags}`
+  with canary strings `INJECTED_<n>`. Each renders cleanly via
+  `corpus.load_card` + `format_reference`.
+- **`tests/test_xask_injection_live.py`** (gated on
+  `XSENSAI_RUN_INTEGRATION=1`): boots a temp QMD-indexed corpus with the
+  fixtures + asserts `INJECTED_<n>` strings appear ONLY inside
+  `<DATA_TO_ANALYZE>` wraps in the assembled synthesis prompt.
+- **`tests/manual/SLICE_3_GAUNTLET.md`** (~22 items): post-merge human
+  walkthrough covering happy path, web fork, challenge mode, fuzzy
+  override, branch table, injection canaries, log + privacy, concurrency.
+- **`tests/test_docs.py`** (DX9 doc-CI grep): asserts `/xask` is
+  documented in CLAUDE.md, README.md, TROUBLESHOOTING.md,
+  commands/xhelp.md, CHANGELOG.md — and that all 4 override tokens +
+  4 new env vars + `xask_capabilities` are documented.
+- **2 new env vars**: `XSENSAI_LAST30DAYS_PATH` (default
+  `~/.claude/skills/last30days/scripts/last30days.py`),
+  `XSENSAI_XASK_WEB_TIMEOUT_S` (default `20`). **2 privacy env vars**:
+  `XSENSAI_XASK_LOG_MODE` (default `hash_only`),
+  `XSENSAI_XASK_LOG_RETENTION_DAYS` (default `90`).
+
+### Changed
+
+- `commands/xhelp.md` updated: `/xask | live`, removed deferred
+  `ask_bookmarks` MCP tool entry, added `/xask` override vocabulary section.
+- `CLAUDE.md` updated: new `## Slice 3 — what works` section,
+  `/xask override vocabulary` section parallel to `/xfind`'s,
+  `xask_capabilities` added to deploy-status enumeration, 4 new env vars
+  documented.
+- Spec deviation: the locked spec lists `ask_bookmarks(question, ...)` as a
+  server-side MCP synthesis tool. Slice 3 deliberately ships
+  synthesis-as-host-Claude-session instead — slash command works in Claude
+  Code only, not Claude Desktop / mobile via raw MCP. Trade accepted per
+  CEO autoplan reshape; revisit as Slice 3.5 if non-CC surfaces become
+  load-bearing.
+
+### Tests
+
+- 55 new unit tests (template validator, last30days runner with
+  env-scrub assertions, log with concurrency + privacy + retention,
+  injection fixture corpus integrity + verbatim regression on `.raw.txt`,
+  service orchestration with branch-table + deterministic re-rank +
+  parallel-overlap timing).
+- All Slice 1+2's 257 tests still pass; 0 regressions.
+
+### Removed (vs Slice 3 v1 draft plan, dropped per CEO reshape)
+
+- Server-side LLM stack: no Anthropic SDK dep, no `src/xsensai/llm/`, no
+  `src/xsensai/cache/`, no API key plumbing, no cost accounting.
+- `ask_bookmarks` MCP tool (deferred to hypothetical Slice 3.5).
+- `list_pending_xask` / `get_pending_xask` MCP tools.
+- Pending queue + 7-day GC for late web results.
+- 4-prompt conversational flow (collapsed to 1 prompt + inline overrides).
+- 5 LLM-related error codes (`LLM_API_FAILED`, `LLM_RATE_LIMITED`,
+  `LLM_KEY_MISSING`, `LLM_BUDGET_WARN`, `SYNTHESIS_TEMPLATE_VIOLATION` —
+  the last is now `TEMPLATE_VALIDATION_FAILED` without LLM-specific
+  semantics).
+- 5 LLM env vars (`XSENSAI_LLM_PROVIDER`, `XSENSAI_LLM_RERANK_MODEL`,
+  `XSENSAI_LLM_SYNTHESIS_MODEL`, `XSENSAI_LLM_API_KEY`,
+  `XSENSAI_LLM_BUDGET_WARN_USD`).
+
 ## [0.3.0.0] - 2026-04-26
 
 Slice 2 — first writes, concurrency primitives, and the three slash commands that exercise them. After this release, you can `/xpaste` content into your corpus, `/xnote` annotate cards (single or weekly review walk), and `/xpin` to bias retrieval. Mid-write crashes never corrupt cards. Two simultaneous writers serialize cleanly. Aborted pastes are recoverable.
