@@ -51,6 +51,6 @@ done
 
 echo ""
 echo "x-sensai slash commands: $installed installed, $skipped already up-to-date, $backed_up backups created."
-echo "Available: /xfind  /xhelp"
+echo "Available: /xfind  /xhelp  /xpaste  /xnote  /xpin"
 echo ""
 echo "If your Claude Code is already running, restart it to pick up the new commands."
