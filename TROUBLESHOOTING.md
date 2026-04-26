@@ -55,9 +55,9 @@ If you have v1 cards in there, the v1 adapter loads them automatically (no actio
 
 ---
 
-## `[DISK_WRITE_FAILED]` (sidecar)
+## `[DISK_WRITE_FAILED]` (sidecar OR write-path)
 
-**Cause:** sidecar `.raw.txt` is missing, unreadable, or its bytes don't match the recorded checksum.
+**Cause:** sidecar `.raw.txt` is missing/unreadable/checksum-mismatched, OR an atomic-write step (durable_replace) failed mid-flight.
 
 **Fix:**
 - Missing sidecar: restore from git or remove `raw_path`/`raw_checksum` from the card (downgrades to v1-adapter path).
@@ -66,6 +66,76 @@ If you have v1 cards in there, the v1 adapter loads them automatically (no actio
   shasum -a 256 path/to/card.raw.txt
   # update raw_checksum in the .md to "sha256:<the hash>"
   ```
+- Atomic-write failure (Slice 2): error details include the orphan `.tmp` path. Check disk space + write permissions. Orphan `.tmp` files are auto-discarded on next `iter_cards` walk.
+- iCloud-synced corpus warning: if `XSENSAI_CORPUS_PATH` lives in `~/Documents` with iCloud "Desktop & Documents" enabled, atomic-rename guarantees may be weakened. Move the vault to a non-synced local path (e.g., `~/x-bookmarks`).
+- Cross-device rename: `tmp` ended up on a different filesystem than the target. Set `$TMPDIR` to a path on the same volume as `$XSENSAI_CORPUS_PATH`, or use a non-synced corpus path.
+
+---
+
+## `[LOCK_HELD]`
+
+**Cause:** another writer is holding the `card_write` lock. /xpaste, /xnote, /xpin all serialize through this lock so concurrent writes don't corrupt the corpus.
+
+**Fix:**
+1. Wait a few seconds and retry. Most writes are sub-second.
+2. The error message lists the holder's PID, hostname, and started_at. If you know that PID is dead (process crashed without releasing), manually clear:
+   ```bash
+   rm "$XSENSAI_CORPUS_PATH/.locks/card_write.lock"
+   ```
+3. Slice 2 uses `fcntl.flock` so process death automatically releases the lock — manual cleanup is rarely needed.
+4. Fencing token mismatch: if a write fails with "fencing token mismatch," your write was started under one lock generation but the lock was re-acquired before commit. Re-run the slash command.
+
+---
+
+## `[MID_WRITE_DETECTED]`
+
+**Cause:** an orphan `.tmp` file was found in the corpus directory — debris from a crashed atomic write (Ctrl-C between sidecar rename and `.md` rename, or kill -9 mid-flight). NOT a user-visible error; surfaces as a stderr log line during `iter_cards`.
+
+**Fix:**
+- Self-healing — the orphan `.tmp` is unlinked automatically. Your card is intact (the transaction never committed); re-run /xpaste with the original content.
+- If you see this repeatedly without crashes, file an issue with the orphan path; could indicate a bug in `durable_replace`.
+
+---
+
+## `[PASTE_EMPTY]`
+
+**Cause:** `paste_bookmark` was called with empty/whitespace-only content.
+
+**Fix:**
+- Re-run /xpaste with non-empty content. The slash command's step-2 guard normally catches this before the MCP layer sees it; if you hit PASTE_EMPTY directly, you're likely calling the MCP tool from a non-slash context.
+
+---
+
+## `[PASTE_CRASHED]`
+
+**Cause:** all three inbox fallback paths (`$XSENSAI_VAULT_INBOX` → `vault/00_inbox/quick.md` → `corpus/_inbox-quick.md`) failed to write. Your aborted paste content could not be saved.
+
+**Fix:**
+1. Check filesystem permissions on the vault directory and the corpus directory.
+2. The error details name the last filesystem error encountered.
+3. Your pasted content was NOT preserved — re-run /xpaste with the content still in your scrollback.
+4. If `$XSENSAI_VAULT_INBOX` is set to a path that doesn't exist, unset it and retry.
+
+---
+
+## `[USER_CONFIRMATION_REQUIRED]`
+
+**Cause:** a mutation MCP tool (`paste_bookmark`, `annotate_card`, `set_pin`) was called without `user_confirmed=True`. This is intentional — Slice 2 cannot hide tools from `tools/list` (FastMCP limitation), so we runtime-guard mutations against accidental Claude calls in non-/xpaste contexts.
+
+**Fix:**
+- Use the corresponding slash command (`/xpaste`, `/xnote`, `/xpin`) which prompts the user explicitly and sets the flag.
+- For scripted automation: pass `user_confirmed=True` to the tool call. You're acknowledging the mutation will happen without an interactive confirm.
+
+---
+
+## `[V1_MUTATION_BLOCKED]`
+
+**Cause:** /xnote or /xpin tried to mutate a v1-shape card (no `raw_path` / `raw_checksum`). Slice 2 refuses these to preserve the verbatim guarantee — synthesizing `raw_bytes` from rendered body would lose `## Thread` / `## Video Transcript` content.
+
+**Fix:**
+- Wait for Slice 6 migration which re-fetches v1 cards from XDK and writes proper sidecars.
+- Your refused-mutation attempt is logged to `{corpus}/_v1-upgraded.jsonl` so Slice 6 prioritizes those cards.
+- Workaround for high-priority cards: manually edit the card's `.md`, add `raw_path: ./{stem}.raw.txt` + `raw_checksum: sha256:<hash>` to the frontmatter, and `shasum -a 256 < some_source > {stem}.raw.txt`. After that the card is v2-shape and mutable.
 
 ---
 
