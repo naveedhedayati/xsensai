@@ -25,9 +25,10 @@ src/xsensai/         Python package (importable as `xsensai`)
 commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (77 tests: 75 always-on + 2 integration-gated)
+tests/               pytest suite (361 tests; ~9 files gated on XSENSAI_RUN_INTEGRATION=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
+  fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)
   fixtures/qmd_query_output.json   QMD JSON-output schema contract fixture
   eval/golden_set.py F1 quality gate (15 queries, target top-3 ≥ 80%)
 
@@ -99,7 +100,7 @@ See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md), keyed by error code.
 ## Tests
 
 ```bash
-.venv/bin/pytest                                      # unit tests (75 fast)
-XSENSAI_RUN_INTEGRATION=1 .venv/bin/pytest            # + 7 integration tests (need QMD)
+.venv/bin/pytest                                      # unit tests (always-on)
+XSENSAI_RUN_INTEGRATION=1 .venv/bin/pytest            # + integration tests (need QMD + last30days)
 xsensai-eval-history                                  # quality-gate trend over time
 ```

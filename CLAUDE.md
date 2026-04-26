@@ -19,7 +19,7 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 1. **Slice 0** — spikes + skeleton + `ping` smoke + `errors.py`. **Shipped (v0.1.0).**
 2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Shipped (v0.2.0.0).**
 3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`. **Shipped (v0.3.0.0).**
-4. **Slice 3** — `/xask` + last30days web fork + synthesis + LLM re-rank.
+4. **Slice 3** — `/xask` + last30days web fork + grounded synthesis (in host Claude Code session, no server-side LLM dep). **Shipped (v0.4.0.0).**
 5. **Slice 4** — XDK sync + `/xsync`.
 6. **Slice 5** — GitHub Actions cron.
 7. **Slice 6** — v1→v2 migration + setup wizard. (v1 read adapter from Slice 1 deleted then.)
