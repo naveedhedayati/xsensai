@@ -52,13 +52,17 @@ async def search(
     """Run a search and return ranked SearchHits.
 
     1. Resolve corpus root (raises CORPUS_UNAVAILABLE if missing).
-    2. Get up to CANDIDATE_LIMIT QMD candidates.
-    3. Load each candidate as LoadedCard (skipping malformed with WARN).
-    4. Filter pinned if requested; compute recency + combined score.
-    5. Apply pin dominance bound (vs unpinned baseline + quota cap).
-    6. Sort, take top `limit`, decide fallback.
+    2. Read-side reindex trigger (Slice 2 UC2 fix): if _index-dirty marker
+       exists, run qmd.update() to flush pending writes into the index, then
+       unlink the marker. Cost: ~5s on first /xfind after /xpaste.
+    3. Get up to CANDIDATE_LIMIT QMD candidates.
+    4. Load each candidate as LoadedCard (skipping malformed with WARN).
+    5. Filter pinned if requested; compute recency + combined score.
+    6. Apply pin dominance bound (vs unpinned baseline + quota cap).
+    7. Sort, take top `limit`, decide fallback.
     """
     corpus_root = corpus.resolve_corpus_path(corpus_path)
+    await _maybe_reindex_if_dirty(corpus_root)
     qmd_hits = await qmd.query(query_text, limit=CANDIDATE_LIMIT)
 
     raw_hits: List[SearchHit] = []
@@ -126,6 +130,53 @@ def _apply_pin_dominance(hits: List[SearchHit], limit: int) -> List[SearchHit]:
     kept_pinned = kept_pinned[:pin_quota]
 
     return unpinned + kept_pinned
+
+
+# /review F7 fix: in-process coalescing lock for reindex. Two concurrent
+# search() calls that both observe a fresh _index-dirty marker would each
+# spawn a `qmd update` subprocess, doubling the cost on the user-facing
+# /xfind path. With this asyncio.Lock, only one reindex runs at a time;
+# concurrent searches await its completion and skip the duplicate work.
+_REINDEX_LOCK = asyncio.Lock()
+
+
+async def _maybe_reindex_if_dirty(corpus_root: Path) -> None:
+    """If _index-dirty marker exists, run qmd update to flush pending writes.
+
+    Coalescing (F7): concurrent searches share a single reindex via
+    _REINDEX_LOCK. Marker is moved aside BEFORE running qmd.update so a
+    re-dirty during the update isn't lost (a write that flips _index-dirty
+    while qmd.update is in flight gets picked up on the NEXT search rather
+    than being silently overwritten).
+
+    Idempotent: marker check is repeated after acquiring the lock so the
+    second-arriving search no-ops if the first already cleared it.
+    """
+    marker = corpus_root / "_index-dirty"
+    if not marker.exists():
+        return
+    async with _REINDEX_LOCK:
+        # Re-check inside the lock: the prior holder may have cleared it.
+        if not marker.exists():
+            return
+        log.info("[REINDEX_TRIGGER] _index-dirty present; running qmd update")
+        # Atomic move-aside: if a write re-dirties while update is in flight,
+        # the new marker stays for the NEXT search rather than being unlinked
+        # and lost.
+        in_flight = marker.with_suffix(".in-flight")
+        try:
+            marker.rename(in_flight)
+        except OSError as e:
+            # If rename failed (someone else already cleared it), skip.
+            log.warning("could not rename _index-dirty: %s", e)
+            return
+        try:
+            await qmd.update()
+        finally:
+            try:
+                in_flight.unlink()
+            except OSError:
+                pass
 
 
 def _safe_corpus_count(corpus_root: Path) -> Optional[int]:

@@ -30,4 +30,12 @@ env/
 # 04_areas/x-bookmarks/_index-errors.md
 # 04_areas/x-bookmarks/_sync-checkpoint.jsonl
 # 04_areas/x-bookmarks/_conflicts.md
-# 04_areas/x-bookmarks/.lock
+# 04_areas/x-bookmarks/.locks/                    (Slice 2 — fcntl.flock target + JSON sidecar)
+# 04_areas/x-bookmarks/_index-dirty               (Slice 2 — write-side reindex marker)
+# 04_areas/x-bookmarks/_inbox-quick.md            (Slice 2 — fallback inbox if vault/00_inbox missing)
+# 04_areas/x-bookmarks/_v1-upgraded.jsonl         (Slice 2 — v1 mutation refusal log)
+# 04_areas/x-bookmarks/_review-cursor.json        (Slice 2 — /xnote review walk position)
+# 04_areas/x-bookmarks/*.tmp                      (Slice 2 — orphan tmp from crashed atomic writes)
+
+# Repo-local artifact: gstack/autoplan deploy reports
+.gstack/

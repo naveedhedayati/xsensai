@@ -4,6 +4,10 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    # Slice 2 nightly lane (per autoplan UC4): runs the integration-gated
+    # concurrency tests against real subprocess fanout. 09:00 UTC daily.
+    - cron: "0 9 * * *"
 
 jobs:
   test:
@@ -19,5 +23,29 @@ jobs:
         run: uv pip install --system --require-hashes -r requirements.txt
       - name: Install package (editable)
         run: uv pip install --system -e . --no-deps
-      - name: Run tests
+      - name: Run unit tests
         run: pytest -v
+
+  integration:
+    # Nightly + on-demand. Runs the XSENSAI_RUN_INTEGRATION-gated tests
+    # (subprocess concurrency, lock-uniqueness property tests). These are
+    # excluded from the always-on `test` job because subprocess timing on
+    # shared runners can be flaky; nightly cadence catches regressions
+    # without blocking PRs on transient flakes.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv
+        run: pip install uv==0.11.7
+      - name: Install dependencies (hash-locked)
+        run: uv pip install --system --require-hashes -r requirements.txt
+      - name: Install package (editable)
+        run: uv pip install --system -e . --no-deps
+      - name: Run integration tests (subprocess concurrency + lock uniqueness)
+        env:
+          XSENSAI_RUN_INTEGRATION: "1"
+        run: pytest tests/test_concurrency_paste.py -v

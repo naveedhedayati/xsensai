@@ -41,6 +41,9 @@ ErrorCode = Literal[
     # Paste / annotate
     "PASTE_EMPTY",
     "PASTE_CRASHED",
+    # Slice 2: v1 mutation refusal + MCP confirmation guard
+    "V1_MUTATION_BLOCKED",
+    "USER_CONFIRMATION_REQUIRED",
     # Retrieval / fallback
     "FALLBACK_FIRED",
     "NO_RESULTS",

@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 DEFAULT_QMD_PATH = "/Users/naveedhedayati/.bun/bin/qmd"
 COLLECTION_NAME = "xsensai-cards"
 QMD_TIMEOUT_SEC = 10.0
+QMD_UPDATE_TIMEOUT_SEC = 30.0  # reindex can be slower than query
 
 
 def get_qmd_path() -> str:
@@ -239,11 +240,60 @@ async def query(text: str, limit: int = 20, qmd_path: Optional[str] = None) -> L
     return _parse_qmd_json(stdout)
 
 
+async def update(qmd_path: Optional[str] = None) -> None:
+    """Run `qmd update -c xsensai-cards` to reindex the collection.
+
+    Used by engine.search()'s read-side reindex trigger when _index-dirty is
+    set. Typical runtime is a few seconds for a small corpus. Best-effort:
+    on failure, logs a warning but does NOT raise — search continues with
+    stale index rather than failing the user's query.
+    """
+    bin_path = qmd_path or get_qmd_path()
+    args = [bin_path, "update", "-c", COLLECTION_NAME]
+    log.info("qmd update: collection=%s", COLLECTION_NAME)
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError as e:
+        log.warning("qmd update: binary not found at %s (%s); index stale", bin_path, e)
+        return
+
+    try:
+        _stdout, stderr = await asyncio.wait_for(
+            proc.communicate(), timeout=QMD_UPDATE_TIMEOUT_SEC
+        )
+    except asyncio.TimeoutError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        log.warning(
+            "qmd update timed out after %ss; index stale until next attempt",
+            QMD_UPDATE_TIMEOUT_SEC,
+        )
+        return
+
+    if proc.returncode != 0:
+        err_text = stderr.decode("utf-8", errors="replace") if stderr else ""
+        log.warning(
+            "qmd update exited with code %d; index stale. stderr: %s",
+            proc.returncode,
+            err_text[:300],
+        )
+
+
 __all__ = [
     "QMDHit",
     "COLLECTION_NAME",
     "DEFAULT_QMD_PATH",
     "QMD_TIMEOUT_SEC",
+    "QMD_UPDATE_TIMEOUT_SEC",
     "get_qmd_path",
     "query",
+    "update",
 ]
