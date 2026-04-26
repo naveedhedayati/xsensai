@@ -62,6 +62,18 @@ ErrorCode = Literal[
     "WEB_FORK_FAILED",
     "EMPTY_CORPUS",
     "TEMPLATE_VALIDATION_FAILED",
+    # Slice 4 — sync errors
+    "OAUTH_SETUP_REQUIRED",
+    "OAUTH_PORT_COLLISION",
+    "OAUTH_BROWSER_NOT_DEFAULT",
+    "OAUTH_GRANT_REFUSED",
+    "OAUTH_KEYCHAIN_BLOCKED",
+    "OAUTH_CLIENT_ID_MISSING",
+    "X_API_RATE_LIMITED",
+    "X_API_NETWORK_ERROR",
+    "SYNC_LOCK_HELD",
+    "CORPUS_UNREACHABLE",
+    "INVALID_FLAGS",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
@@ -74,6 +86,25 @@ InfoCode = Literal[
     "WEB_PARSE",
     "WEB_NOT_INSTALLED",  # last30days script missing or not owned by user
     "CHALLENGE_NO_DISSENT",
+    # Slice 4 — sync info envelopes (non-error status)
+    "CHECKPOINT_RESUME",
+    "EXTRACTION_DEFERRED",
+    "THREAD_FETCH_FAILED",
+    "THREAD_OUTSIDE_7DAY_WINDOW",
+    "THREAD_FETCH_UNKNOWN_EMPTY",
+    "SEARCH_ALL_UNAVAILABLE",
+    "SYNC_DONE",
+    "SYNC_PARTIAL",
+    "SYNC_PROGRESS",
+    "SYNC_STARTING",
+    "SYNC_STALE",
+    "IDEMPOTENT_SKIP",
+    "VAULT_DIRTY_FIRST_RUN",
+    "VAULT_NOT_GIT",
+    "GIT_LOCKED",
+    "THREADS_PERMANENTLY_UNFETCHED",
+    "NO_PENDING_EXTRACTIONS",
+    "EXTRACT_DONE",
 ]
 
 _VALID_CODES = frozenset(get_args(ErrorCode))

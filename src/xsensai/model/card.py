@@ -33,7 +33,7 @@ class CardMedia(BaseModel):
 class CardFrontmatter(BaseModel):
     """Parsed from YAML frontmatter only. Strict, validated."""
 
-    model_config = ConfigDict(extra="forbid", strict=False)
+    model_config = ConfigDict(extra="forbid", strict=False, populate_by_name=True)
 
     source_type: Literal["bookmark", "paste"]
     captured: datetime
@@ -66,6 +66,21 @@ class CardFrontmatter(BaseModel):
     # typed it). Lets paste_bookmark detect "this exact paste already happened
     # in the last 24h" without comparing every prior raw_bytes.
     content_fingerprint: Optional[str] = None
+
+    # Slice 4 — thread-fetch outcome for bookmark cards. Distinguishes between
+    # "we fetched the OP reply chain successfully" (complete), "search_recent
+    # returned empty AND age check passed" (outside_window — try search_all
+    # branch already taken), "empty result but ambiguous classification — could
+    # be retried" (unknown_empty), "real API error" (failed), and "bookmark
+    # is a single tweet with no thread" (not_applicable). None for paste cards.
+    thread_fetch_status: Optional[
+        Literal["complete", "outside_window", "failed", "unknown_empty", "not_applicable"]
+    ] = None
+
+    # Slice 4 — forensic run id for crash-resume diagnostics. Set on cards
+    # written by /xsync; lets /xextract retry-failed and post-mortem tools
+    # group cards by sync run. Underscored to indicate internal/non-user.
+    xsync_run_id: Optional[str] = Field(default=None, alias="_xsync_run_id")
 
     @field_validator("captured", "date", "next_review_at")
     @classmethod

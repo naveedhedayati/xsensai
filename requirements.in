@@ -1,8 +1,7 @@
 # Source dependencies for xsensai.
 # Compile with: uv pip compile requirements.in -o requirements.txt --generate-hashes
 #
-# Slice 0 deps only. Slice 4+ adds httpx/xdk; Slice 4+ adds whisper; etc.
-# Each later slice updates this file and re-compiles.
+# Each slice that adds a runtime dep updates this file and re-compiles.
 
 mcp>=1.0
 pydantic>=2.0
@@ -11,6 +10,10 @@ pyyaml>=6.0
 # Slice 1: card model + retrieval
 python-frontmatter>=1.1
 regex>=2024.0
+
+# Slice 4: XDK ingestion (X API v2 client). Pre-1.0 — pin upper bound at the
+# next major to avoid silent breaking changes in transitive surface.
+xdk>=0.1.0,<1.0
 
 # Test
 pytest>=8.0
