@@ -51,6 +51,12 @@ done
 
 echo ""
 echo "x-sensai slash commands: $installed installed, $skipped already up-to-date, $backed_up backups created."
-echo "Available: /xfind  /xhelp  /xpaste  /xnote  /xpin"
+
+# Slice 4 D-7: data-driven Available list — derive from commands/*.md instead
+# of a hand-maintained string that goes stale every slice.
+if compgen -G "$COMMANDS_SRC/*.md" > /dev/null; then
+  available=$(ls "$COMMANDS_SRC"/*.md | xargs -I{} basename {} .md | awk '{printf "/%s ", $0}')
+  echo "Available: $available"
+fi
 echo ""
 echo "If your Claude Code is already running, restart it to pick up the new commands."

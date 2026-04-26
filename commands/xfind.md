@@ -14,6 +14,16 @@ If the user's request is for general factual info or web-fresh content,
 politely note that `/xfind` is corpus-only and ask whether they want to
 proceed anyway.
 
+## Sync-status banner (Slice 4 — auto-prepended)
+
+BEFORE running the search, check the vault for `_sync-status.md`. If the
+file exists AND `consecutive_failures >= 2` OR `last_success > 5 days ago`,
+prepend ONE line above results:
+
+> ⚠ Sync is stale — last successful sync was {N} days ago / {N} consecutive failures. Run `/xsync` when convenient.
+
+Do NOT block the search. The banner is informational only.
+
 ## Conversational flow
 
 1. **If the user provided a query inline** with `/xfind <query>`, use that

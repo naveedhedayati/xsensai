@@ -1,0 +1,182 @@
+"""Token providers — abstract the X API refresh-token source.
+
+Per /autoplan D-S2 fix: UC-1=C made the orchestrator headless-ready but auth
+was still desktop/Keychain-centric. TokenProviderProtocol decouples the
+sync.client.XClient from how the token is sourced. Slice 4 ships:
+
+  - KeychainTokenProvider  — reads/writes via the `keyring` library, which
+    on macOS talks to Security.framework directly (no subprocess argv
+    exposure). Used in manual mode.
+  - EnvSecretTokenProvider — reads from environment (used by tests + Slice 5 cron)
+
+Per /review F10 fix: the original implementation used `security` CLI via
+subprocess, which leaked the token via argv (visible to `ps -ef` for ~50ms
+per write). The keyring library uses Security.framework directly via
+PyObjC bindings — no subprocess, no argv leak.
+
+Slice 5 cron will instantiate EnvSecretTokenProvider with the GitHub Actions
+encrypted secret. No XClient code changes needed.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from typing import Optional, Protocol, runtime_checkable
+
+from xsensai.errors import XSensaiError
+
+
+KEYCHAIN_SERVICE_NAME = "x-sensai"
+KEYCHAIN_ACCOUNT_NAME = "x-api-refresh-token"
+ENV_VAR_NAME = "XSENSAI_X_REFRESH_TOKEN"
+
+
+@runtime_checkable
+class TokenProvider(Protocol):
+    """Source for the X API OAuth 2.0 refresh token.
+
+    Implementations must NOT cache the token across calls — the access token
+    is short-lived and refresh-token rotation can happen at any time. Each
+    `get_refresh_token()` call should re-read the canonical source.
+    """
+
+    def get_refresh_token(self) -> str:
+        """Return the current refresh token. Raise XSensaiError on failure."""
+        ...
+
+    def store_refresh_token(self, token: str) -> None:
+        """Persist a (possibly rotated) refresh token to the source."""
+        ...
+
+
+class KeychainTokenProvider:
+    """macOS Keychain-backed token provider via the `keyring` library.
+
+    Per /review F10 fix: uses keyring (which on macOS talks to
+    Security.framework directly via PyObjC) instead of the `security` CLI.
+    The token is never exposed via argv — the original `security
+    add-generic-password ... -w <token>` design leaked the token to
+    `ps -ef` for ~50ms per write. keyring's set_password() goes through
+    the Security framework with no subprocess.
+
+    Stores under service=x-sensai, account=x-api-refresh-token.
+    """
+
+    def __init__(
+        self,
+        service: str = KEYCHAIN_SERVICE_NAME,
+        account: str = KEYCHAIN_ACCOUNT_NAME,
+    ) -> None:
+        self._service = service
+        self._account = account
+
+    def _get_keyring(self) -> object:
+        """Lazy-import keyring so test environments without it can still
+        import this module (tests that mock the provider don't need keyring)."""
+        try:
+            import keyring  # type: ignore[import-untyped]
+        except ImportError:
+            raise XSensaiError(
+                code="OAUTH_SETUP_REQUIRED",
+                cause="`keyring` package is not installed.",
+                attempted="import keyring",
+                next_action="Run: pip install keyring  (or: VIRTUAL_ENV=.venv uv pip install keyring)",
+                retryable=False,
+            )
+        return keyring
+
+    def get_refresh_token(self) -> str:
+        keyring = self._get_keyring()
+        try:
+            token: Optional[str] = keyring.get_password(self._service, self._account)
+        except Exception as e:
+            raise XSensaiError(
+                code="OAUTH_KEYCHAIN_BLOCKED",
+                cause=f"Keychain lookup failed: {type(e).__name__}: {e}",
+                attempted=f"keyring.get_password({self._service!r}, {self._account!r})",
+                next_action=(
+                    "Open Keychain Access and verify ACL on the x-sensai entry. "
+                    "If unsolvable, re-run `python -m xsensai.sync.setup_oauth` "
+                    "to recreate the entry."
+                ),
+                retryable=True,
+            )
+
+        if not token:
+            raise XSensaiError(
+                code="OAUTH_SETUP_REQUIRED",
+                cause="X API refresh token not found in macOS Keychain.",
+                attempted=f"keyring.get_password({self._service!r}, {self._account!r})",
+                next_action=(
+                    "Run `python -m xsensai.sync.setup_oauth` to authorize "
+                    "x-sensai with your X developer app."
+                ),
+                retryable=True,
+            )
+        return token
+
+    def store_refresh_token(self, token: str) -> None:
+        if not token:
+            raise ValueError("Refusing to store an empty refresh token.")
+        keyring = self._get_keyring()
+        try:
+            keyring.set_password(self._service, self._account, token)
+        except Exception as e:
+            raise XSensaiError(
+                code="OAUTH_KEYCHAIN_BLOCKED",
+                cause=f"Keychain write failed: {type(e).__name__}: {e}",
+                attempted=f"keyring.set_password({self._service!r}, {self._account!r}, ...)",
+                next_action=(
+                    "Open Keychain Access and grant write permission, or "
+                    "verify the keyring backend (`python -c 'import keyring; "
+                    "print(keyring.get_keyring())'`)."
+                ),
+                retryable=True,
+            )
+
+
+class EnvSecretTokenProvider:
+    """Environment-variable-backed token provider.
+
+    Used by tests (avoids Keychain prompts) and by Slice 5 cron (where the
+    GitHub Actions encrypted secret is exported as an env var). Read-only:
+    `store_refresh_token` is a soft no-op (cron can't write back to GitHub
+    secrets without a PAT, and we deliberately avoid that blast radius —
+    rotation handling becomes manual re-auth via setup_oauth.py).
+    """
+
+    def __init__(self, env_var: str = ENV_VAR_NAME) -> None:
+        self._env_var = env_var
+
+    def get_refresh_token(self) -> str:
+        token = os.environ.get(self._env_var, "").strip()
+        if not token:
+            raise XSensaiError(
+                code="OAUTH_SETUP_REQUIRED",
+                cause=f"Environment variable {self._env_var} is unset or empty.",
+                attempted=f"os.environ[{self._env_var!r}]",
+                next_action=(
+                    f"Export {self._env_var} with the X API refresh token, "
+                    "or use KeychainTokenProvider in manual mode."
+                ),
+                retryable=True,
+            )
+        return token
+
+    def store_refresh_token(self, token: str) -> None:
+        # Intentional no-op: env vars are external-managed in cron; rotation
+        # surfaces as the next get_refresh_token() returning the rotated value
+        # (or AUTH_FAILED if the secret store wasn't updated).
+        pass
+
+
+__all__ = [
+    "TokenProvider",
+    "KeychainTokenProvider",
+    "EnvSecretTokenProvider",
+    "KEYCHAIN_SERVICE_NAME",
+    "KEYCHAIN_ACCOUNT_NAME",
+    "ENV_VAR_NAME",
+]

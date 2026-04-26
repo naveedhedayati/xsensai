@@ -42,12 +42,16 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 
 ## locks/
 
-### Slice 4: add `index_rebuild` + `transcribe_queue` lock domains
+### ~~Slice 4: add `index_rebuild` + `transcribe_queue` lock domains~~ — CLOSED
 
-**Priority:** P2 (unblocks Slice 4 cron sync)
-**Origin:** Slice 2 EFFECTIVE plan: "ship card_write only via fcntl.flock + UUID fencing token. Defer index_rebuild + transcribe_queue + heartbeat to Slice 4 where cron will actually exercise them."
-**Description:** When Slice 4 starts, extend `LockDomain` enum + add per-domain `with_*_lock` context managers. Heartbeat thread machinery is API-stable in Slice 2 but unused; Slice 4 will spawn it for cron.
-**Files:** [src/xsensai/locks/filelock.py](src/xsensai/locks/filelock.py), [src/xsensai/locks/__init__.py](src/xsensai/locks/__init__.py)
+**Status:** Done in Slice 4 (v0.5.0.0). `index_rebuild` lock + heartbeat thread shipped per /autoplan E-2 fix (heartbeat is diagnostics-only; flock is the truth). `transcribe_queue` deliberately NOT added per S-4 fix (YAGNI — add when `/xtranscribe` actually ships).
+
+### Slice 5: cron context detection in service.run()
+
+**Priority:** P1 (unblocks Slice 5 cron)
+**Origin:** /autoplan F8 (DX subagent finding) — XSENSAI_VAULT_DIRTY_PROCEED env var is wrong default for cron (cron's vault is a fresh checkout, never "dirty" in the user's sense). Slice 5 needs an explicit "I am cron, ignore that env var" detection.
+**Description:** Add `mode: SyncMode = "headless"` detection at service.run start; in headless mode, automatically set proceed_dirty=True since the cron vault is a clone. Document in CLAUDE.md.
+**Files:** [src/xsensai/sync/service.py](src/xsensai/sync/service.py), CLAUDE.md.
 
 ---
 
@@ -112,3 +116,52 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 ## Completed
 
 (Slice 2 — see [CHANGELOG.md](CHANGELOG.md) v0.3.0.0 for the full ship log. Plan: `~/.claude/plans/slice-2-draft.md` EFFECTIVE SLICE 2 section. All 25 contract items DONE.)
+
+---
+
+## Slice 4 (shipped — see CHANGELOG v0.5.0.0). Future work spec'd:
+
+### Slice 4.5: `/xsync single <tweet-id>` real implementation
+
+**Priority:** P3 (only if user uses it)
+**Origin:** Slice 4 stubbed single-tweet mode because XDK's bookmark endpoint doesn't expose single-bookmark fetch. Adding it requires `/2/tweets/{id}` integration (separate XDK method, separate auth scope check).
+**Description:** Implement `XClient.get_tweet(id)` via XDK's `posts.get_post(id)`. Plumb through `_gather_bookmarks(mode="single", target=...)` so `/xsync 2028162355511583052` actually fetches and writes that one tweet.
+**Files:** [src/xsensai/sync/client.py](src/xsensai/sync/client.py), [src/xsensai/sync/service.py](src/xsensai/sync/service.py), test_sync_service.py.
+
+### Slice 5: GitHub Actions cron + git push + cost ceiling
+
+**Priority:** P1 (next slice in build sequence)
+**Origin:** Slice 4 deliberately scoped to manual /xsync per /autoplan UC-1=C answered C. Engine is headless-runnable; Slice 5 just needs the cron yaml + secret rotation + push automation.
+**Description:**
+1. `.github/workflows/sync.yml` — cron schedule (every 2-3 days per spec), env secrets for X client_id + refresh token (use `EnvSecretTokenProvider`).
+2. Add `entrypoints.headless.run()` that wraps `service.run` + auto-handles extraction (subagent OR server-side LLM — Slice 5 architectural decision).
+3. Git push + pull-rebase + `SYNC_PUSH_REJECTED.md` flag handling per spec section "Sync automation" step 9.
+4. Cost ceiling: hard cap on per-run X API spend; bail with `[COST_LIMIT_REACHED]` envelope. (Not needed for manual /xsync but cron should not blow up the user's budget on a runaway loop.)
+5. Cross-host conflict resolution per spec line 213-214.
+
+### Future: bounded-async backlog fetch (T-2 from /autoplan, deferred per recommendation)
+
+**Priority:** P3 (post-launch, only if user reports backfill latency complaint)
+**Origin:** /autoplan Phase 3 T-2 — Codex argued for bounded async (3-5 concurrent XDK calls) for backlog mode; subagent argued YAGNI (sequential is right since wall-clock is dominated by extraction at 50× the network cost). Shipped sequential per recommendation.
+**Description:** Wrap `XClient.iter_bookmarks()` with `asyncio.gather` + dynamic-throttle on 429. ~50 LoC + 2 tests. Adds the asyncio surface to XClient.
+**Files:** [src/xsensai/sync/client.py](src/xsensai/sync/client.py), test_sync_client.py.
+
+### Future: sync_status() MCP tool for cross-Claude-surface health checks
+
+**Priority:** P3 (only if user actually uses Claude Desktop for /xsync diagnostics — currently /xsync is Claude Code only)
+**Origin:** /autoplan open-question A. Modeled after Slice 3's `xask_capabilities()`. Cheap to add (~10 LoC).
+**Description:** Add MCP tool `sync_status()` that returns the parsed `_sync-status.md` heartbeat as a structured dict. Lets Claude Desktop sessions answer "when did sync last run?" without inferring from corpus state.
+**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), test_mcp_server.py.
+
+### Future: /xtranscribe slash command + transcribe_queue lock domain
+
+**Priority:** P2 (when user actually wants video transcripts on cards)
+**Origin:** Spec section "Sync automation" step 7. Slice 4 sync writes `media.video_transcript_status: queued` for cards with video; the queue draining is a separate slice.
+**Description:**
+1. New slash command `/xtranscribe` with backlog / single / retry-failed modes.
+2. New service module `xsensai.sync.transcribe` — yt-dlp + whisper integration.
+3. Activate the `transcribe_queue` LockDomain (currently NOT reserved per S-4 YAGNI; add when this slice spec'd).
+4. Cost ceiling per-card and per-run.
+5. `[INFO/TRANSCRIBE_DONE]` and `[INFO/TRANSCRIBE_PARTIAL]` envelopes.
+**Files:** new `src/xsensai/sync/transcribe.py`, `commands/xtranscribe.md`.
+

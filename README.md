@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 8 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 3 — `/xask` thinking session (corpus + last30days web fork + grounded synthesis in the host Claude Code session). See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 4 — `/xsync` + `/xextract` (XDK ingestion + smart-default extraction). See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -22,10 +22,10 @@ src/xsensai/         Python package (importable as `xsensai`)
   synthesis/         Output template + validator + injection-fixture helpers (Slice 3)
   web_fork/          last30days subprocess wrapper, env-scrubbed (Slice 3)
 
-commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md)
+commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md, xsync.md, xextract.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (361 tests; ~9 files gated on XSENSAI_RUN_INTEGRATION=1)
+tests/               pytest suite (475+ tests; ~9 files gated on XSENSAI_RUN_INTEGRATION=1, plus 1 file gated on XSENSAI_RUN_LIVE_X_API=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
   fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)
@@ -54,7 +54,7 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 #   From Claude Code:       /xfind
 ```
 
-## What works (Slice 1 + Slice 2 + Slice 3)
+## What works (Slice 1 + Slice 2 + Slice 3 + Slice 4)
 
 | Surface | Where | What |
 |---|---|---|
@@ -64,6 +64,8 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 | `/xnote` | Claude Code slash command | Annotate an existing card with `## Notes` block (Slice 2) |
 | `/xpin` | Claude Code slash command | Pin / unpin / list pinned cards; due-for-review surfacing (Slice 2) |
 | `/xask` | Claude Code slash command | Thinking session: corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs (Slice 3) |
+| `/xsync` | Claude Code slash command | Ingest new bookmarks from X via XDK; smart-default extraction (inline ≤5, deferred >5) (Slice 4) |
+| `/xextract` | Claude Code slash command | Backfill extraction for cards left as `extraction_pending: true` (Slice 4) |
 | `search_bookmarks` | MCP tool (any Claude conversation) | Structured response: `{hits, meta, rendered_markdown}` |
 | `get_bookmark` | MCP tool | Full card detail by id (returned by search_bookmarks) |
 | `paste_bookmark` / `recover_aborted_paste` | MCP tools | Powers `/xpaste` (Slice 2) |
@@ -71,6 +73,29 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 | `set_pin` / `list_pinned` / `due_cards_for_review` | MCP tools | Powers `/xpin` (Slice 2) |
 | `xask_capabilities` | MCP tool | Read-only deploy-status helper for `/xask` (Slice 3) |
 | `ping` | MCP tool | Smoke test (Slice 0) |
+
+## Slice 4 — quick start (sync setup)
+
+Realistic TTHW: ~25-45 min first time (dominated by external X dev portal),
+~5-8 min on a new machine with the dev app already registered.
+
+```bash
+# 1. Register an X dev app at https://developer.x.com (~5-15 min, browser).
+# 2. Buy ~$10 of API credits at https://console.x.com (one-time).
+# 3. Export your client_id:
+export XSENSAI_X_CLIENT_ID=<your-client-id>
+
+# 4. Verify preconditions (no browser, no token write):
+python -m xsensai.sync.setup_oauth --check
+
+# 5. Run the OAuth flow (opens browser, captures redirect, stores in Keychain):
+python -m xsensai.sync.setup_oauth
+
+# 6. In Claude Code, smoke test:
+#    /xsync since
+```
+
+Steady-state cost: **~$1.18/month** for ~50 bookmarks/month with ~10 threaded.
 
 ## Quality gate (F1)
 
@@ -89,8 +114,8 @@ This validates the autoplan D1 decision — QMD's BM25 ranking is sufficient for
 - **Slice 1** (shipped): card model + sidecar storage + v1 read adapter + retrieval (QMD wrapper, scoring, [B]/[P] format) + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp`.
 - **Slice 2** (shipped): locks (`fcntl.flock` + UUID fencing) + atomic sidecar write (`durable_replace` with macOS `F_FULLFSYNC`) + `/xpaste` + `/xnote` + `/xpin` + read-side reindex trigger so paste→find round-trips in one session.
 - **Slice 3** (shipped, v0.4.0.0): `/xask` + last30days web fork + grounded synthesis in the host Claude Code session (no server-side LLM dep).
-- **Slice 4**: XDK sync + `/xsync` + checkpoint resume.
-- **Slice 5**: GitHub Actions cron.
+- **Slice 4** (shipped, v0.5.0.0): XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing + cross-process index_rebuild lock.
+- **Slice 5**: GitHub Actions cron + git push + cost ceiling. (Engine is already headless-runnable per Slice 4 UC-1=C; Slice 5 = wire up the schedule.)
 - **Slice 6**: v1→v2 migration script + setup wizard. (v1 read adapter from Slice 1 deleted at this point.)
 
 ## Troubleshooting

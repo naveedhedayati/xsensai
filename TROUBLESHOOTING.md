@@ -246,3 +246,131 @@ Symptoms: real-corpus `/xfind` returns weird matches, or pinned cards dominate.
   - `FALLBACK_TOP_SCORE_FLOOR = 0.35` — raise to fire fallback more often.
   - `PIN_DOMINANCE_FRACTION = 0.5` — raise to be stricter about pinned cards.
 - If quality is consistently below 80% top-3, the autoplan D1 deferral was wrong: pull Claude/GPT re-rank forward (currently scheduled for Slice 3).
+
+---
+
+# Slice 4 — sync errors
+
+## `[OAUTH_SETUP_REQUIRED]` — refresh token not in Keychain
+
+`/xsync` printed: `OAUTH_SETUP_REQUIRED: X API refresh token not found in macOS Keychain.`
+
+**Fix:** run `python -m xsensai.sync.setup_oauth`. This walks you through the
+PKCE OAuth flow (opens browser, you grant, captures the redirect, stores the
+refresh token in Keychain under service=`x-sensai`, account=`x-api-refresh-token`).
+
+If you don't have an X dev app yet:
+1. Register at https://developer.x.com (~5-15 min, browser, dev portal approval).
+2. Buy ~$10 of API credits at https://console.x.com (one-time).
+3. Export your client_id: `export XSENSAI_X_CLIENT_ID=<your-client-id>`
+4. Then run setup_oauth.
+
+Verify preconditions WITHOUT burning a token first: `python -m xsensai.sync.setup_oauth --check`.
+
+## `[OAUTH_CLIENT_ID_MISSING]` — no client_id
+
+Same diagnosis as `OAUTH_SETUP_REQUIRED`: you need an X dev app's client_id
+exported via `XSENSAI_X_CLIENT_ID` (or `--client-id` flag). See above.
+
+## `[OAUTH_PORT_COLLISION]` — could not bind localhost port
+
+The PKCE callback server couldn't bind a 127.0.0.1 ephemeral port. This is
+rare. Wait a moment and retry. If persistent, restart your shell.
+
+## `[OAUTH_BROWSER_NOT_DEFAULT]` — couldn't auto-open the browser
+
+Auto-open via `webbrowser.open()` failed. setup_oauth falls back to printing
+the URL to stdout. Copy it into any browser to grant access. Or run with
+`--copy-url` from the start to skip the auto-open attempt.
+
+## `[OAUTH_GRANT_REFUSED]` — X returned an error or callback timeout
+
+Either:
+1. You denied the grant in the browser (intentional or accidental). Re-run.
+2. The 5-minute callback timeout expired. Re-run + complete grant within 5 min.
+3. State parameter mismatch (potential CSRF). Re-run in a clean browser session.
+
+## `[OAUTH_KEYCHAIN_BLOCKED]` — Keychain ACL or prompt issue
+
+The macOS Keychain refused the read or write. Open Keychain Access app, find
+the `x-sensai` entry, grant the calling Python access. If the entry is
+corrupt, delete it and re-run `setup_oauth`.
+
+## `[X_API_RATE_LIMITED]` — 429 after 3 backoffs
+
+The XDK wrapper exhausted its rate-limit retry budget. X's bookmarks
+endpoint allows 180 reqs/15min per user; search-recent allows 300/15min.
+
+**Fix:** wait 15 minutes (the rate-limit window resets) and re-run `/xsync`.
+The checkpoint persists, so resume picks up where you left off.
+
+## `[X_API_NETWORK_ERROR]` — 5xx / network timeout after 3 retries
+
+Transient network issue on X's side. Wait a few minutes and re-run. Same
+checkpoint-resume guarantee as rate-limit.
+
+## `[INFO/THREAD_OUTSIDE_7DAY_WINDOW]` — bookmark too old for thread fetch
+
+X's `search_recent` endpoint only goes back 7 days. For older bookmarks,
+the OP's reply chain isn't fetchable through this endpoint. The bookmarked
+tweet is still saved (with `thread_fetch_status: outside_window` on the
+card). The graceful-degradation path tried `search_all` (full archive)
+once; if your X API tier doesn't include it, you'll see
+`[INFO/SEARCH_ALL_UNAVAILABLE]` instead.
+
+**Recovery:** if you really want the OP-replies, paste them via `/xpaste`
+or upgrade your X API tier (full-archive search costs more credits).
+
+## `[INFO/SEARCH_ALL_UNAVAILABLE]` — Full Archive not in your tier
+
+Your X API tier doesn't expose `/2/tweets/search/all`. The card landed
+with the bookmarked tweet text only. This envelope fires ONCE per session
+so you know the upgrade path exists if you want it.
+
+## `[INFO/VAULT_DIRTY_FIRST_RUN]` — uncommitted xsync output detected
+
+A prior `/xsync` wrote cards but you haven't committed them yet. To avoid
+stacking syncs on top of unreviewed output, `/xsync` STOPPED. Two ways
+forward:
+
+1. Commit the prior output: `cd <vault> && git add -A && git commit -m 'manual: prior xsync output'`. Then re-run `/xsync`.
+2. Force the new sync anyway: re-run with `proceed dirty` keyword (e.g., `/xsync since proceed dirty`). Or set `XSENSAI_VAULT_DIRTY_PROCEED=1` to opt in permanently.
+
+## `[INFO/VAULT_NOT_GIT]` — vault is not a git repo
+
+You're probably using Obsidian Sync or another non-git mechanism. The
+cleanliness check is informational only; `/xsync` continues. To opt into
+git-based tracking: `cd <vault> && git init && git add . && git commit -m 'initial'`.
+
+## `[INFO/GIT_LOCKED]` — `.git/index.lock` exists
+
+Another git operation is in progress. Wait a few seconds and retry. If
+persistent, manually inspect `.git/index.lock` and remove if stale.
+
+## `[INFO/EXTRACTION_DEFERRED]` — cards saved with extraction_pending
+
+Smart default chose deferred mode (>5 new cards). The cards are on disk
+and `/xfind` will find them via rendered-body search. To backfill the
+`retrieval_summary` + `retrieval_tags` for sharper retrieval, run
+`/xextract` whenever convenient. (No urgency; Slice 5 cron will handle
+this automatically once it lands.)
+
+## `[INFO/NO_PENDING_EXTRACTIONS]` — `/xextract` had nothing to do
+
+Either you've already extracted everything (good), or you ran `/xextract`
+without first running `/xsync` to add pending cards. Run `/xsync` first
+to fetch new bookmarks; if smart-default puts them in deferred mode,
+`/xextract` will pick them up.
+
+## `[INVALID_FLAGS]` — conflicting modifiers
+
+You typed both `inline` and `defer` in the same `/xsync` invocation.
+They conflict — pick one or neither (smart default chooses for you).
+
+## `[CORPUS_UNREACHABLE]` — vault directory unresponsive
+
+Likely your vault is on a network volume (NFS, iCloud Drive in
+"Optimize Mac Storage" mode, mounted SMB) that's offline or paused.
+Check that the vault sync isn't paused; verify `ls $XSENSAI_CORPUS_PATH`
+returns quickly. Re-run `/xsync` once the volume is responsive.
+

@@ -20,8 +20,8 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Shipped (v0.2.0.0).**
 3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`. **Shipped (v0.3.0.0).**
 4. **Slice 3** — `/xask` + last30days web fork + grounded synthesis (in host Claude Code session, no server-side LLM dep). **Shipped (v0.4.0.0).**
-5. **Slice 4** — XDK sync + `/xsync`.
-6. **Slice 5** — GitHub Actions cron.
+5. **Slice 4** — XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing. **Shipped (v0.5.0.0).**
+6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution. (Engine is already headless-runnable per Slice 4 UC-1=C; Slice 5 = wire up the schedule.)
 7. **Slice 6** — v1→v2 migration + setup wizard. (v1 read adapter from Slice 1 deleted then.)
 
 ## Slice 1 — what works
@@ -49,6 +49,19 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 - `XSensaiInfo` envelope (sibling of `XSensaiError`) for non-error status lines (web miss / empty / parse / no_corpus_match / challenge_no_dissent). Renders as `[INFO/CODE] {cause}\n{action_or_note}\nSource: {source}` — same contract discipline as errors.
 - 5 prompt-injection adversarial fixtures at `tests/fixtures/prompt_injection/` with canary strings; live integration test (`tests/test_xask_injection_live.py`, gated on `XSENSAI_RUN_INTEGRATION=1`) asserts canaries stay inside `<DATA_TO_ANALYZE>` boundaries.
 
+## Slice 4 — what works
+
+- `/xsync` (Claude Code) ingests new bookmarks from X via XDK. One-prompt conversational flow (no flags per CLAUDE.md:90). Modes: `since-last-run` (default) / `backlog` / `single` (stubbed) / `preview`. Inline modifiers: `inline`, `defer`, `commit`, `proceed dirty`. Smart-default extraction (UC-2=C): inline if N≤5 new cards, deferred (cards land with `extraction_pending: true`) if N>5.
+- `/xextract` (Claude Code, NEW) drains `extraction_pending: true` cards. Same one-prompt flow per Slice 1+3 precedent. Modes: `backlog` (all pending) / `single` (one card-id) / numeric-limit / `retry-failed`.
+- `xsensai.sync` package: 8 modules — `service` (single-process orchestrator per E-1 fix), `client` (XDK wrapper with auth refresh + rate-limit backoff + Spike #6b graceful degradation in `get_thread()`), `auth` (TokenProvider seam — Keychain + Env), `extraction` (HostExtractor + DeferredExtractor sharing a single `extract_batch()` protocol), `card_writer`, `dedup` (S-7 race recheck under lock), `checkpoint` (E-4 ordering, archives to `~/.cache/xsensai/sync-checkpoints/`), `heartbeat` (`_sync-status.md` committed per D-S3).
+- `xsensai.sync.git_check`: vault cleanliness check + opt-in `commit` keyword (UC-3=C). All subprocess calls use argv list + `--` separator; paths validated via `_assert_inside_corpus` (E-5 defense).
+- `xsensai.sync.setup_oauth`: minimal one-shot PKCE flow. 127.0.0.1 ephemeral port, state-parameter CSRF defense (E-5). `--check`, `--dry-run`, `--copy-url` modes. 4 dedicated error envelopes for the OAuth lifecycle (port collision, browser, grant refused, Keychain blocked).
+- `xsensai.locks` extension: `LockDomain` enum + `with_index_rebuild_lock()` with optional heartbeat thread (E-2 fix: heartbeat is diagnostics-only; flock is the truth; `threading.excepthook` installed globally). Reindex now serialized cross-process between `/xsync` finalize and `/xfind`/`/xask` read-side reindex (S-9 fix).
+- Schema: 2 new fields on `CardFrontmatter` — `thread_fetch_status`, `xsync_run_id` (S-8 fix; `model/card.py` was missing from original Modify list and would have failed strict validation).
+- Privacy-aware sync log at `~/.cache/xsensai/xsync-log.jsonl` (same chmod 600 + flock pattern as xask). `XSENSAI_XSYNC_LOG_MODE=full` to opt in to full text.
+- 17 new error/info codes; full list in `commands/xhelp.md`. Notable: `[INFO/THREAD_OUTSIDE_7DAY_WINDOW]` + `[INFO/SEARCH_ALL_UNAVAILABLE]` (Spike #6b graceful-degradation outcomes).
+- Pre-flight: `python -m xsensai.sync.setup_oauth --check` verifies preconditions (X dev app client_id, macOS Keychain CLI, 127.0.0.1 port binding, xdk import) without burning a real token.
+
 ## Slice 1 — config
 
 - **`XSENSAI_CORPUS_PATH`** (default `~/Documents/Vault/04_areas/x-bookmarks/`) — where cards live.
@@ -62,6 +75,33 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 - **`XSENSAI_XASK_WEB_TIMEOUT_S`** (default `20`) — soft deadline for the web fork. On timeout, output renders `## (web context unavailable this run — timeout)`.
 - **`XSENSAI_XASK_LOG_MODE`** (default `hash_only`) — `off` | `hash_only` | `full`. Privacy default strips question text; `full` logs raw text for empirical steering.
 - **`XSENSAI_XASK_LOG_RETENTION_DAYS`** (default `90`) — purge threshold for `python -m xsensai.xask.log purge`.
+
+## Slice 4 — config
+
+- **`XSENSAI_X_CLIENT_ID`** — your X dev app's client_id. Required for `setup_oauth.py` AND for `/xsync` (the orchestrator builds the XDK client with it).
+- **`XSENSAI_XSYNC_LOG_MODE`** (default `hash_only`) — `off` | `hash_only` | `full`. Same privacy convention as xask log.
+- **`XSENSAI_XSYNC_LOG_RETENTION_DAYS`** (default `90`) — purge threshold for `python -m xsensai.sync.log purge`.
+- **`XSENSAI_VAULT_DIRTY_PROCEED`** (default unset) — set `1` / `true` / `yes` to permanently opt in to "sync over uncommitted xsync output" without typing `proceed dirty` each time. Mostly relevant for cron later (Slice 5 will detect "headless context" and override).
+- **macOS Keychain entry** (not an env var, but config-shaped): service `x-sensai`, account `x-api-refresh-token`. Written by `setup_oauth.py`, read by `KeychainTokenProvider`.
+
+## /xsync override vocabulary
+
+Append to your input (anywhere on the line — fully conversational, NO flags):
+- empty / `latest` / `since` / `new` — sync since last run (default)
+- `backlog` / `full` / `everything` / `all` — fetch all bookmarks
+- 19-digit numeric or `x.com/.../status/<id>` URL — single-tweet mode (stubbed in Slice 4)
+- `preview` / `dry-run` — fetch list, write nothing
+- `inline` / `force inline` — force inline extraction regardless of N
+- `defer` / `defer all` — force deferred regardless of N
+- `commit` / `auto commit` — `git add` + `git commit` after sync (no push)
+- `proceed dirty` / `dirty ok` — sync anyway when prior xsync left uncommitted output
+
+## /xextract override vocabulary
+
+- empty / `all` / `backlog` — process every pending card
+- 19-digit numeric (card_id stem) — single-card mode
+- a small number (`5`) — process at most that many
+- `retry` / `failed` — synonym for backlog
 
 ## /xfind override vocabulary
 

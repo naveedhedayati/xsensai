@@ -14,15 +14,21 @@ writer's in-flight work continues.
 """
 
 from xsensai.locks.filelock import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    LockDomain,
     LockHandle,
     LockMetadata,
     verify_fencing_token,
     with_card_write_lock,
+    with_index_rebuild_lock,
 )
 
 __all__ = [
+    "HEARTBEAT_INTERVAL_SECONDS",
+    "LockDomain",
     "LockHandle",
     "LockMetadata",
     "verify_fencing_token",
     "with_card_write_lock",
+    "with_index_rebuild_lock",
 ]
