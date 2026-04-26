@@ -31,11 +31,17 @@ def test_default_scopes_include_offline_access():
 
 
 def test_check_mode_succeeds_with_client_id(monkeypatch, capsys):
+    """Check mode passes when all preconditions are met. Mocks `security`
+    CLI presence so the test runs cross-platform (Linux CI runners don't
+    have the macOS `security` binary)."""
+    import shutil
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/security" if name == "security" else real_which(name))
     monkeypatch.setenv(CLIENT_ID_ENV, "fake-client-id-123")
     rc = _check_preconditions(client_id="fake-client-id-123")
     out = capsys.readouterr().out
     assert "client_id present" in out
-    assert "security`" in out  # macOS Keychain CLI check
+    assert "security`" in out  # macOS Keychain CLI check label
     assert rc == 0
 
 

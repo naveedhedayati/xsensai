@@ -141,8 +141,10 @@ def run(
     started = time.monotonic()
     now = now or datetime.now(timezone.utc)
     run_id = str(uuid.uuid4())
-    corpus = resolve_corpus_path(corpus_path)
 
+    # Validate flag conflict BEFORE corpus resolution so callers without a
+    # real corpus (CI test-only environments, --check probes) can still get
+    # the canonical INVALID_FLAGS envelope without first hitting CORPUS_UNAVAILABLE.
     if inline_override and defer_override:
         return _failed_result(
             run_id,
@@ -155,6 +157,8 @@ def run(
             ),
             duration_ms=int((time.monotonic() - started) * 1000),
         )
+
+    corpus = resolve_corpus_path(corpus_path)
 
     if mode == "preview":
         return _run_preview(
