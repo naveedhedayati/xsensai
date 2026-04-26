@@ -1,7 +1,7 @@
-"""Error contract for x-sensai.
+"""Error and info contract for x-sensai.
 
-Every user-visible error in every slice uses XSensaiError. The format is locked
-by the spec's error matrix and rendered via .format():
+Every user-visible error uses XSensaiError. The format is locked by the spec's
+error matrix and rendered via .format():
 
     [CODE] {one-line cause}
     What was attempted: {action}
@@ -9,9 +9,19 @@ by the spec's error matrix and rendered via .format():
     Retryable: yes | no
     {optional details}
 
-Codes are constrained to a Literal so a typo at the call site fails type-check
-and (defensively) raises at construction. New codes are added by extending
-ErrorCode below; the spec's error matrix is the source of truth.
+XSensaiInfo provides structured non-error status lines (web miss, no_results,
+challenge dup, etc.) so branch outcomes stay contract-compliant instead of
+emitting raw English. Format:
+
+    [INFO/CODE] {one-line cause}
+    {action_or_note}
+    Source: {source}
+
+Prefix taxonomy: error lines start with `[A-Z_]+]`; info lines start with
+`[INFO/...]`. Scripts grepping for errors must exclude `^\\[INFO/`.
+
+Codes are constrained to Literals so typos fail type-check and raise at
+construction. New codes extend ErrorCode / InfoCode below.
 """
 
 from __future__ import annotations
@@ -41,18 +51,33 @@ ErrorCode = Literal[
     # Paste / annotate
     "PASTE_EMPTY",
     "PASTE_CRASHED",
-    # Slice 2: v1 mutation refusal + MCP confirmation guard
+    # v1 mutation refusal + MCP confirmation guard
     "V1_MUTATION_BLOCKED",
     "USER_CONFIRMATION_REQUIRED",
     # Retrieval / fallback
     "FALLBACK_FIRED",
     "NO_RESULTS",
     "CORPUS_UNAVAILABLE",
+    # /xask error states
+    "WEB_FORK_FAILED",
+    "EMPTY_CORPUS",
+    "TEMPLATE_VALIDATION_FAILED",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
 
+InfoCode = Literal[
+    # /xask non-error status lines (XSensaiInfo envelope)
+    "NO_CORPUS_MATCH",
+    "WEB_NO_FRESH",
+    "WEB_TIMEOUT",
+    "WEB_PARSE",
+    "WEB_NOT_INSTALLED",  # last30days script missing or not owned by user
+    "CHALLENGE_NO_DISSENT",
+]
+
 _VALID_CODES = frozenset(get_args(ErrorCode))
+_VALID_INFO_CODES = frozenset(get_args(InfoCode))
 
 
 # Not frozen: Python's exception machinery mutates __traceback__ / __cause__ /
@@ -106,4 +131,49 @@ class XSensaiError(Exception):
         return self.format()
 
 
-__all__ = ["ErrorCode", "XSensaiError"]
+@dataclass(frozen=True)
+class XSensaiInfo:
+    """Non-error status line for /xask branch outcomes (Slice 3, DX2 fix).
+
+    The error contract requires every user-visible diagnostic to flow through
+    a structured envelope, not raw English strings. XSensaiInfo is the
+    sibling of XSensaiError for cases that aren't errors but ARE status
+    worth surfacing in a uniform shape (web miss, no_results, challenge
+    dup, etc.).
+
+    Format renders as:
+
+        [INFO/CODE] {one-line cause}
+        {action_or_note}
+        Source: {source}
+
+    Frozen because XSensaiInfo is not an Exception (no traceback mutation).
+    """
+
+    code: InfoCode
+    cause: str
+    action_or_note: str
+    source: str
+
+    def __post_init__(self) -> None:
+        if self.code not in _VALID_INFO_CODES:
+            raise ValueError(
+                f"Unknown info code: {self.code!r}. "
+                f"Add it to InfoCode in xsensai/errors.py if it's new."
+            )
+
+    def format(self) -> str:
+        """Render the canonical user-visible status message."""
+        return "\n".join(
+            [
+                f"[INFO/{self.code}] {self.cause}",
+                self.action_or_note,
+                f"Source: {self.source}",
+            ]
+        )
+
+    def __str__(self) -> str:
+        return self.format()
+
+
+__all__ = ["ErrorCode", "InfoCode", "XSensaiError", "XSensaiInfo"]
