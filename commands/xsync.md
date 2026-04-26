@@ -64,11 +64,21 @@ no flag parsing per CLAUDE.md, conversational only.
    single mode). Capture the JSON output. **DO NOT narrate this Bash call.**
 
 5. **Branch on JSON.status:**
-   - `failed` → emit `JSON.rendered_message` verbatim and STOP.
-   - `empty` → emit `JSON.rendered_message` verbatim and STOP. (No new cards.)
+   - `failed` → call `finalize` with `--no-success` (so consecutive_failures
+     in `_sync-status.md` increments per F7 fix), then emit
+     `JSON.rendered_message` verbatim and STOP. The finalize call records
+     the error code in the heartbeat for the stale-banner logic.
+   - `empty` → call `finalize` with `--success --new-cards 0`, then emit
+     `JSON.rendered_message` verbatim and STOP. (Empty IS a successful run —
+     no work to do, but the run completed cleanly.)
+   - `partial` → emit a per-card-failures summary line, then continue to
+     step 6 with the cards_written subset (do NOT skip extraction for the
+     successful cards). At step 9 finalize, pass `--no-success` so
+     consecutive_failures increments — partial counts as not-fully-clean.
    - `preview` → emit `JSON.rendered_message` verbatim followed by a
      formatted list of `JSON.cards_written` (which here holds the preview
-     list, not actual writes). STOP.
+     list, not actual writes). STOP. No finalize call (preview ran no real
+     mutations).
    - `ok` → continue to step 6.
 
 6. **Emit progress + extraction strategy** (DX5 carve-out — replaces full DX8

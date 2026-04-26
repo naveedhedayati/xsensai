@@ -243,10 +243,17 @@ def git_locked_envelope() -> XSensaiInfo:
 
 
 def _find_git_root(start: Path) -> Optional[Path]:
-    """Walk upward from `start` looking for a .git directory."""
+    """Walk upward from `start` looking for a `.git` directory OR a `.git`
+    file (worktree-style — file points to the actual gitdir).
+
+    Treating only `is_dir()` as a git repo (the original implementation)
+    silently misclassified worktrees and submodules as non-git, disabling
+    the cleanliness check for those vault setups.
+    """
     cur = start.resolve()
     for _ in range(10):  # bounded walk
-        if (cur / ".git").is_dir():
+        gitdir = cur / ".git"
+        if gitdir.is_dir() or gitdir.is_file():
             return cur
         if cur.parent == cur:
             return None

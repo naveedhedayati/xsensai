@@ -191,6 +191,65 @@ def test_finalize_run_writes_status_file(tmp_path):
     assert fr.sync_status.extraction_pending_count == 1
 
 
+def test_apply_extraction_run_id_mismatch_refuses(tmp_path, stub_provider, monkeypatch):
+    """F17 fix: apply_extraction with a forged run_id refuses to overwrite.
+
+    Threat model: a malicious or confused CLI invocation passes a
+    different --run-id than the one in the card's xsync_run_id frontmatter.
+    Without this check, any caller could overwrite ANY card's
+    retrieval_summary + retrieval_tags by guessing card_ids.
+    """
+    monkeypatch.setattr(
+        "xsensai.sync.service.XClient",
+        lambda **kw: _stub_xclient([_bookmark("500")]),
+    )
+    result = run(
+        mode="backlog", token_provider=stub_provider, client_id="fake",
+        corpus_path=tmp_path,
+    )
+    assert len(result.cards_written) == 1
+    card_id = result.cards_written[0]["card_id"]
+    real_run_id = result.run_id
+
+    # Forge a different run_id (not /xextract retry-failed prefix)
+    forged_run_id = "totally-different-run-id-12345"
+    apply_result = apply_extraction(
+        card_id=card_id,
+        summary="Two sentences. Just enough.",
+        tags=["one", "two", "three"],
+        run_id=forged_run_id,
+        corpus_path=tmp_path,
+    )
+    assert apply_result.ok is False
+    assert "run_id mismatch" in apply_result.error
+    assert apply_result.extraction_pending is True
+
+
+def test_apply_extraction_extract_pending_prefix_bypasses_run_id_check(tmp_path, stub_provider, monkeypatch):
+    """F17 fix: /xextract retry-failed legitimately needs to apply with a
+    different run_id. The `extract-pending-` prefix on run_id is the signal
+    that this is the legitimate retry path."""
+    monkeypatch.setattr(
+        "xsensai.sync.service.XClient",
+        lambda **kw: _stub_xclient([_bookmark("600")]),
+    )
+    result = run(
+        mode="backlog", token_provider=stub_provider, client_id="fake",
+        corpus_path=tmp_path,
+    )
+    card_id = result.cards_written[0]["card_id"]
+
+    # Use the extract-pending prefix (matches what extract_pending() generates)
+    apply_result = apply_extraction(
+        card_id=card_id,
+        summary="Two sentences. Just enough.",
+        tags=["one", "two", "three"],
+        run_id="extract-pending-some-uuid",
+        corpus_path=tmp_path,
+    )
+    assert apply_result.ok is True
+
+
 def test_apply_extraction_validation_failure_keeps_pending(tmp_path, stub_provider, monkeypatch):
     """Empty summary triggers extraction_pending=True; ok=False returned."""
     # First write a card via run() so we have a real LoadedCard

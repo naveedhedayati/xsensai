@@ -41,9 +41,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 from xsensai.errors import XSensaiError, XSensaiInfo
 from xsensai.locks import with_card_write_lock, with_index_rebuild_lock
-from xsensai.locks.filelock import verify_fencing_token
-from xsensai.model.card import CardFrontmatter, LoadedCard
-from xsensai.storage import sidecar
+from xsensai.model.card import LoadedCard
 from xsensai.storage.corpus import (
     iter_cards_metadata,
     load_card_by_id,
@@ -57,12 +55,8 @@ from xsensai.sync.dedup import (
     source_id_exists_under_lock,
 )
 from xsensai.sync.extraction import (
-    DeferredExtractor,
     Extractor,
-    ExtractionPrompt,
-    ExtractionResult,
     HostExtractor,
-    build_extraction_prompt,
 )
 from xsensai.sync.heartbeat import update_after_run, SyncStatus
 from xsensai.sync.log import SyncLogEntry, append_log
@@ -73,7 +67,6 @@ log = logging.getLogger(__name__)
 
 
 SyncMode = Literal["since-last-run", "backlog", "single", "retry-failed", "preview"]
-SyncRunOutcome = Literal["success", "partial", "failed", "aborted"]
 ExtractionStrategy = Literal["inline", "deferred", "none"]
 
 # UC-2=C threshold: smart-default boundary. <=5 inline, >5 deferred.
@@ -93,6 +86,10 @@ class RunResult:
     rendered_message: Optional[str] = None  # XSensaiError / XSensaiInfo .format()
     info_envelopes: List[str] = field(default_factory=list)
     duration_ms: int = 0
+    # F2 fix: per-card write failures surface so the slash command can render
+    # a partial-success summary instead of silently reporting status="ok"
+    # when some cards failed to write.
+    cards_failed: List[Dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -217,12 +214,26 @@ def run(
     # 4. Write cards + checkpoint per card under brief card_write locks.
     checkpoint = CheckpointFile(corpus)
     cards_written: List[CardWriteResult] = []
+    cards_failed: List[Dict[str, str]] = []  # F2 fix: surface per-card write failures
     threads_unfetched = 0
     info_envelopes: List[str] = []
 
     for bookmark in bookmarks_to_write:
-        # Compute thread fetch in advance (no lock needed — pure fetch)
-        thread = _fetch_thread_for(xclient, bookmark, now=now)
+        sid = str(bookmark.get("id", "")).strip()
+        # Compute thread fetch in advance (no lock needed — pure fetch).
+        # F3 fix: wrap in try/except so a single bookmark's thread failure
+        # (rate-limit, network, etc.) doesn't tear down the whole run.
+        try:
+            thread = _fetch_thread_for(xclient, bookmark, now=now)
+        except XSensaiError as e:
+            log.warning("Thread fetch failed for source_id=%s: %s", sid, e.code)
+            thread = ThreadFetchResult(status="failed")
+            cards_failed.append({"source_id": sid, "error_code": e.code, "stage": "thread_fetch"})
+        except Exception as e:
+            log.warning("Thread fetch unhandled for source_id=%s: %s", sid, e)
+            thread = ThreadFetchResult(status="failed")
+            cards_failed.append({"source_id": sid, "error_code": "UNHANDLED", "stage": "thread_fetch"})
+
         if thread.status == "outside_window":
             threads_unfetched += 1
         if thread.search_all_unavailable and "[INFO/SEARCH_ALL_UNAVAILABLE]" not in " ".join(info_envelopes):
@@ -238,7 +249,8 @@ def run(
             log.info("Idempotent skip: source_id=%s already on disk", skip.source_id)
             continue
         except XSensaiError as e:
-            log.warning("Card write failed for source_id=%s: %s", bookmark.get("id"), e.code)
+            log.warning("Card write failed for source_id=%s: %s", sid, e.code)
+            cards_failed.append({"source_id": sid, "error_code": e.code, "stage": "write"})
             continue
 
         cards_written.append(result)
@@ -260,10 +272,20 @@ def run(
             ]
 
     duration = int((time.monotonic() - started) * 1000)
+    # F2 fix: status reflects per-card outcomes. "ok" means all attempted
+    # writes succeeded. "partial" means some succeeded, some failed. The
+    # slash command renders SYNC_PARTIAL instead of SYNC_DONE in that case.
+    if cards_failed and not cards_written:
+        run_status = "failed"
+    elif cards_failed:
+        run_status = "partial"
+    else:
+        run_status = "ok"
+
     return RunResult(
         run_id=run_id,
-        status="ok",
-        extraction_strategy=strategy,
+        status=run_status,
+        extraction_strategy=strategy if cards_written else "none",
         cards_written=[
             {
                 "card_id": r.card_id,
@@ -273,6 +295,7 @@ def run(
             }
             for r in cards_written
         ],
+        cards_failed=cards_failed,
         extraction_prompts=extraction_prompts,
         threads_unfetched_this_run=threads_unfetched,
         info_envelopes=info_envelopes,
@@ -317,6 +340,34 @@ def apply_extraction(
     try:
         with with_card_write_lock(corpus, "xsync") as h:
             card = load_card_by_id(card_id, corpus_path=corpus)
+
+            # F17 fix: authz check. Apply only if (a) the card was actually
+            # written by /xsync (has xsync_run_id) AND it matches the caller's
+            # run_id, OR (b) the card is in extraction_pending=True state and
+            # the caller is /xextract retry-failed (run_id="extract-pending").
+            # Without this, a malicious or confused CLI invocation could
+            # overwrite ANY card's retrieval_summary + retrieval_tags by
+            # forging --card-id + --run-id.
+            card_run_id = card.fm.xsync_run_id
+            is_retry_path = run_id.startswith("extract-pending")
+            if card_run_id is not None and card_run_id != run_id and not is_retry_path:
+                return ApplyExtractionResult(
+                    card_id=card_id, ok=False, extraction_pending=True,
+                    error=(
+                        f"run_id mismatch: card was written by run {card_run_id[:8]}..., "
+                        f"this call's run_id is {run_id[:8]}... — refusing to overwrite. "
+                        "If you really meant to re-extract, use /xextract single <card-id> instead."
+                    ),
+                )
+            if not card.fm.extraction_pending and not is_retry_path:
+                return ApplyExtractionResult(
+                    card_id=card_id, ok=False, extraction_pending=False,
+                    error=(
+                        f"card already has extraction_pending=False; refusing to overwrite. "
+                        "If you really meant to re-extract, use /xextract single <card-id>."
+                    ),
+                )
+
             new_fm = card.fm.model_copy(update={
                 "retrieval_summary": cleaned_summary,
                 "retrieval_tags": cleaned_tags,
@@ -415,7 +466,10 @@ def extract_pending(
     """
     started = time.monotonic()
     corpus = resolve_corpus_path(corpus_path)
-    run_id = str(uuid.uuid4())
+    # Prefix with "extract-pending-" so apply_extraction's F17 authz check
+    # recognizes this as the legitimate retry path (and accepts the run_id
+    # mismatch with the card's original xsync_run_id).
+    run_id = f"extract-pending-{uuid.uuid4()}"
 
     pending_cards: List[LoadedCard] = []
     if mode == "single":
@@ -451,7 +505,9 @@ def extract_pending(
         for card in iter_cards_metadata(corpus_path=corpus):
             if card.fm.extraction_pending:
                 pending_cards.append(card)
-                if limit and len(pending_cards) >= limit:
+                # Use `> 0` not truthy `limit` so `--limit 0` doesn't act
+                # as no-limit (was the contradiction xextract.md mentioned).
+                if limit is not None and limit > 0 and len(pending_cards) >= limit:
                     break
 
     if not pending_cards:
@@ -566,7 +622,12 @@ def _gather_bookmarks(
 
 
 def _decide_strategy(*, n: int, inline: bool, defer: bool) -> ExtractionStrategy:
-    """Smart-default per UC-2=C. Overrides honored."""
+    """Smart-default per UC-2=C. Overrides honored.
+
+    inline+defer conflict is rejected upstream in run() with INVALID_FLAGS;
+    the assert here documents the invariant for direct callers.
+    """
+    assert not (inline and defer), "inline and defer are mutually exclusive — caller must reject upstream"
     if inline:
         return "inline"
     if defer:
@@ -880,7 +941,15 @@ def _cli() -> int:
 
     p_fin = sub.add_parser("finalize", help="Heartbeat + checkpoint archive + reindex")
     p_fin.add_argument("--run-id", required=True)
-    p_fin.add_argument("--success", action="store_true")
+    # F7 fix: use BooleanOptionalAction so the slash command can pass
+    # `--no-success` on the failure/partial path. Default is True for
+    # back-compat (most existing automation calls finalize after success).
+    p_fin.add_argument(
+        "--success",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="--success (default) marks the run successful. --no-success increments consecutive_failures.",
+    )
     p_fin.add_argument("--new-cards", type=int, default=0)
     p_fin.add_argument("--inline-count", type=int, default=0)
     p_fin.add_argument("--pending-count", type=int, default=0)
@@ -902,5 +971,4 @@ def _cli() -> int:
 
 
 if __name__ == "__main__":
-    import json  # noqa: E402 (imported in cli helpers above already)
     sys.exit(_cli())

@@ -14,10 +14,10 @@ when `consecutive_failures >= 2` or `last_success > 5 days ago`.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
 from xsensai.storage import sidecar
 

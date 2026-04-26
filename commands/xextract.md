@@ -28,23 +28,10 @@ INDEX-ONLY signals).
      validation)
    - any number `N` (just a digit) → process at most N pending
 
-2. **Prompt for confirmation when count is large.** Run a count first:
-
-   ```bash
-   python -P -m xsensai.sync.service extract-pending --mode backlog --limit 0
-   ```
-
-   (Pass `--limit 0` to get just the count without prompts.)
-
-   Wait — actually the service doesn't support a `--limit 0` count probe.
-   Instead, glob the corpus for cards with `extraction_pending: true`. Use
-   the MCP tool `due_cards_for_review` is the wrong primitive — there is
-   no count primitive yet. Just emit:
-
-   > Counting pending extractions...
-
-   Then run the actual `extract-pending` call (it returns the count as
-   `len(JSON.extraction_prompts)`).
+2. **Run extract-pending to gather prompts + count in one shot.** No
+   separate count probe is needed — the service returns
+   `JSON.extraction_prompts` whose length IS the count. If the count is
+   surprising (>20), surface it in your opener so the user knows the budget.
 
 3. **Run the service** to gather pending cards + extraction prompts:
 

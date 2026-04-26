@@ -171,7 +171,25 @@ async def _maybe_reindex_if_dirty(corpus_root: Path) -> None:
             log.warning("could not rename _index-dirty: %s", e)
             return
         try:
-            await qmd.update()
+            # Slice 4 S-9 fix: cross-process serialization with /xsync's reindex.
+            # Both write paths (this read-side trigger + sync.service finalize)
+            # must hold the same flock-backed lock so two qmd update subprocesses
+            # never race. Lock is short-held; reindex itself is the slow part.
+            from xsensai.locks import with_index_rebuild_lock
+            from xsensai.storage.corpus import resolve_corpus_path
+            try:
+                with with_index_rebuild_lock(
+                    resolve_corpus_path(corpus_root), "xfind", heartbeat=False,
+                ):
+                    await qmd.update()
+            except XSensaiError as lock_err:
+                # If LOCK_HELD here, /xsync is currently reindexing — that
+                # update will pick up the same _index-dirty state. Skip
+                # (the marker stays; we'll catch it on the next read).
+                if lock_err.code == "LOCK_HELD":
+                    log.info("[REINDEX_SKIPPED] index_rebuild lock held; skipping read-side update")
+                    return
+                raise
         finally:
             try:
                 in_flight.unlink()

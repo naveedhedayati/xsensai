@@ -4,8 +4,15 @@ Per /autoplan D-S2 fix: UC-1=C made the orchestrator headless-ready but auth
 was still desktop/Keychain-centric. TokenProviderProtocol decouples the
 sync.client.XClient from how the token is sourced. Slice 4 ships:
 
-  - KeychainTokenProvider  — reads/writes via macOS `security` CLI (manual mode)
+  - KeychainTokenProvider  — reads/writes via the `keyring` library, which
+    on macOS talks to Security.framework directly (no subprocess argv
+    exposure). Used in manual mode.
   - EnvSecretTokenProvider — reads from environment (used by tests + Slice 5 cron)
+
+Per /review F10 fix: the original implementation used `security` CLI via
+subprocess, which leaked the token via argv (visible to `ps -ef` for ~50ms
+per write). The keyring library uses Security.framework directly via
+PyObjC bindings — no subprocess, no argv leak.
 
 Slice 5 cron will instantiate EnvSecretTokenProvider with the GitHub Actions
 encrypted secret. No XClient code changes needed.
@@ -14,8 +21,9 @@ encrypted secret. No XClient code changes needed.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
-from typing import Protocol, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 from xsensai.errors import XSensaiError
 
@@ -44,12 +52,16 @@ class TokenProvider(Protocol):
 
 
 class KeychainTokenProvider:
-    """macOS Keychain-backed token provider via the `security` CLI.
+    """macOS Keychain-backed token provider via the `keyring` library.
 
-    Stores under service=x-sensai, account=x-api-refresh-token. ACL defaults
-    to "only the calling app" — if the user runs /xsync from `python` and
-    later from `uv run python`, they may get a Keychain prompt the first
-    time the new identity tries to read.
+    Per /review F10 fix: uses keyring (which on macOS talks to
+    Security.framework directly via PyObjC) instead of the `security` CLI.
+    The token is never exposed via argv — the original `security
+    add-generic-password ... -w <token>` design leaked the token to
+    `ps -ef` for ~50ms per write. keyring's set_password() goes through
+    the Security framework with no subprocess.
+
+    Stores under service=x-sensai, account=x-api-refresh-token.
     """
 
     def __init__(
@@ -60,75 +72,46 @@ class KeychainTokenProvider:
         self._service = service
         self._account = account
 
-    def get_refresh_token(self) -> str:
+    def _get_keyring(self) -> object:
+        """Lazy-import keyring so test environments without it can still
+        import this module (tests that mock the provider don't need keyring)."""
         try:
-            result = subprocess.run(
-                [
-                    "security", "find-generic-password",
-                    "-s", self._service,
-                    "-a", self._account,
-                    "-w",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15.0,
-            )
-        except subprocess.TimeoutExpired:
-            raise XSensaiError(
-                code="OAUTH_KEYCHAIN_BLOCKED",
-                cause="Keychain `security` lookup timed out (likely a blocking permission prompt).",
-                attempted=f"security find-generic-password -s {self._service} -a {self._account}",
-                next_action=(
-                    "Open Keychain Access, grant the calling Python access to "
-                    f"`{self._service}/{self._account}`, then re-run /xsync."
-                ),
-                retryable=True,
-            )
-        except FileNotFoundError:
+            import keyring  # type: ignore[import-untyped]
+        except ImportError:
             raise XSensaiError(
                 code="OAUTH_SETUP_REQUIRED",
-                cause="`security` CLI not found — Keychain unavailable on this host.",
-                attempted="security find-generic-password (macOS Keychain CLI)",
-                next_action=(
-                    "Either run on macOS, or use EnvSecretTokenProvider with "
-                    f"the {ENV_VAR_NAME} environment variable set."
-                ),
+                cause="`keyring` package is not installed.",
+                attempted="import keyring",
+                next_action="Run: pip install keyring  (or: VIRTUAL_ENV=.venv uv pip install keyring)",
                 retryable=False,
             )
+        return keyring
 
-        if result.returncode != 0:
-            stderr = (result.stderr or "").strip()
-            if "could not be found" in stderr.lower() or result.returncode == 44:
-                raise XSensaiError(
-                    code="OAUTH_SETUP_REQUIRED",
-                    cause="X API refresh token not found in macOS Keychain.",
-                    attempted=f"security find-generic-password -s {self._service} -a {self._account}",
-                    next_action=(
-                        "Run `python -m xsensai.sync.setup_oauth` to authorize "
-                        "x-sensai with your X developer app."
-                    ),
-                    retryable=True,
-                )
+    def get_refresh_token(self) -> str:
+        keyring = self._get_keyring()
+        try:
+            token: Optional[str] = keyring.get_password(self._service, self._account)
+        except Exception as e:
             raise XSensaiError(
                 code="OAUTH_KEYCHAIN_BLOCKED",
-                cause=f"Keychain lookup failed (rc={result.returncode}): {stderr or '<no stderr>'}",
-                attempted=f"security find-generic-password -s {self._service} -a {self._account}",
+                cause=f"Keychain lookup failed: {type(e).__name__}: {e}",
+                attempted=f"keyring.get_password({self._service!r}, {self._account!r})",
                 next_action=(
-                    "Check Keychain Access for ACL issues on the entry. If unsolvable, "
-                    "re-run `python -m xsensai.sync.setup_oauth` to recreate the entry."
+                    "Open Keychain Access and verify ACL on the x-sensai entry. "
+                    "If unsolvable, re-run `python -m xsensai.sync.setup_oauth` "
+                    "to recreate the entry."
                 ),
                 retryable=True,
             )
 
-        token = (result.stdout or "").strip()
         if not token:
             raise XSensaiError(
                 code="OAUTH_SETUP_REQUIRED",
-                cause="Keychain returned an empty refresh token.",
-                attempted=f"security find-generic-password -s {self._service} -a {self._account}",
+                cause="X API refresh token not found in macOS Keychain.",
+                attempted=f"keyring.get_password({self._service!r}, {self._account!r})",
                 next_action=(
-                    "Re-run `python -m xsensai.sync.setup_oauth` to write a fresh token."
+                    "Run `python -m xsensai.sync.setup_oauth` to authorize "
+                    "x-sensai with your X developer app."
                 ),
                 retryable=True,
             )
@@ -137,35 +120,19 @@ class KeychainTokenProvider:
     def store_refresh_token(self, token: str) -> None:
         if not token:
             raise ValueError("Refusing to store an empty refresh token.")
-        # Use -U to update if the entry already exists; -w sets the secret.
+        keyring = self._get_keyring()
         try:
-            result = subprocess.run(
-                [
-                    "security", "add-generic-password",
-                    "-s", self._service,
-                    "-a", self._account,
-                    "-w", token,
-                    "-U",
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=15.0,
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            keyring.set_password(self._service, self._account, token)
+        except Exception as e:
             raise XSensaiError(
                 code="OAUTH_KEYCHAIN_BLOCKED",
-                cause=f"Keychain `security add-generic-password` failed: {type(e).__name__}",
-                attempted=f"security add-generic-password -s {self._service} -a {self._account}",
-                next_action="Open Keychain Access and grant write permission, then retry.",
-                retryable=True,
-            )
-        if result.returncode != 0:
-            raise XSensaiError(
-                code="OAUTH_KEYCHAIN_BLOCKED",
-                cause=f"Keychain write failed (rc={result.returncode}): {(result.stderr or '').strip()}",
-                attempted=f"security add-generic-password -s {self._service} -a {self._account}",
-                next_action="Check Keychain Access permissions and retry.",
+                cause=f"Keychain write failed: {type(e).__name__}: {e}",
+                attempted=f"keyring.set_password({self._service!r}, {self._account!r}, ...)",
+                next_action=(
+                    "Open Keychain Access and grant write permission, or "
+                    "verify the keyring backend (`python -c 'import keyring; "
+                    "print(keyring.get_keyring())'`)."
+                ),
                 retryable=True,
             )
 

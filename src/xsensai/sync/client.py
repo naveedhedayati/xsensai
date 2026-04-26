@@ -145,7 +145,12 @@ class XClient:
         return self._xdk_client
 
     def _retry_refresh_on_401(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        """Call fn(*args, **kwargs); on 401 refresh once + retry; second 401 → AUTH_FAILED."""
+        """Call fn(*args, **kwargs); on 401 refresh once + retry; second 401 → AUTH_FAILED.
+
+        Persists rotated refresh token via TokenProvider — X uses single-use
+        refresh tokens per OAuth 2.0 PKCE; failing to persist the rotated
+        token after a mid-call refresh would lock the user out on next run.
+        """
         try:
             return fn(*args, **kwargs)
         except Exception as e:
@@ -153,7 +158,7 @@ class XClient:
                 raise
             log.warning("XDK call hit 401; attempting one silent refresh + retry")
             try:
-                self._xdk_client.refresh_token()  # type: ignore[union-attr]
+                new_token = self._xdk_client.refresh_token()  # type: ignore[union-attr]
             except Exception as refresh_err:
                 raise XSensaiError(
                     code="AUTH_FAILED",
@@ -162,6 +167,23 @@ class XClient:
                     next_action="Re-run `python -m xsensai.sync.setup_oauth` to re-authorize.",
                     retryable=True,
                 )
+            # Persist a rotated refresh token mirror of _ensure_client behavior.
+            # Without this, X's single-use refresh-token policy would lock the
+            # user out on next /xsync (the in-memory rotation is fine for THIS
+            # run, but the stored token in Keychain is stale).
+            if isinstance(new_token, dict) and "refresh_token" in new_token:
+                rotated = new_token["refresh_token"]
+                if rotated:
+                    try:
+                        current = self._token_provider.get_refresh_token()
+                    except Exception:
+                        current = None
+                    if rotated != current:
+                        log.info("X rotated refresh token mid-call; persisting new value")
+                        try:
+                            self._token_provider.store_refresh_token(rotated)
+                        except Exception as store_err:
+                            log.warning("Failed to persist rotated refresh token: %s", store_err)
             try:
                 return fn(*args, **kwargs)
             except Exception as second_err:
@@ -186,9 +208,9 @@ class XClient:
         client = self._ensure_client()
 
         def _fetch() -> Any:
-            # XDK exposes get_my_user via users client per its signature; we
-            # tolerate either return shape (object with .data.id, or dict).
-            return client.users.find_my_user()
+            # XDK exposes get_me() at users/client.py:818 (verified). Tolerant
+            # of dict-or-object return shape via _extract_user_id.
+            return client.users.get_me()
 
         result = self._retry_refresh_on_401(_fetch)
         user_id = _extract_user_id(result)
@@ -196,7 +218,7 @@ class XClient:
             raise XSensaiError(
                 code="AUTH_FAILED",
                 cause="X API /users/me returned no user id.",
-                attempted="client.users.find_my_user()",
+                attempted="client.users.get_me()",
                 next_action="Verify your X dev app has 'users.read' scope.",
                 retryable=False,
             )
@@ -223,7 +245,10 @@ class XClient:
         pages_seen = 0
 
         while True:
-            page_data = self._fetch_one_bookmark_page(
+            # Wrap each page fetch in the auth-aware retry helper so a 401
+            # mid-iteration triggers ONE silent refresh + retry (not recursion).
+            page_data = self._retry_refresh_on_401(
+                self._fetch_one_bookmark_page,
                 client, user_id, cursor=cursor, max_results=max_per_page,
             )
             yield page_data
@@ -298,11 +323,19 @@ class XClient:
                         next_action="Check your network and re-run /xsync. The checkpoint resumes where it left off.",
                         retryable=True,
                     )
-                # Unhandled — wrap and re-raise via auth-aware path
+                # Unhandled — wrap and re-raise via auth-aware path. The
+                # _retry_refresh_on_401 wrapper ALREADY contains the bounded
+                # one-refresh-and-retry loop; previously this branch recursed
+                # back into _fetch_one_bookmark_page through the wrapper,
+                # which on persistent 401 would stack-overflow. Now we just
+                # surface AUTH_FAILED — outer caller decides whether to retry.
                 if _looks_like_unauthorized(e):
-                    return self._retry_refresh_on_401(
-                        self._fetch_one_bookmark_page,
-                        client, user_id, cursor=cursor, max_results=max_results,
+                    raise XSensaiError(
+                        code="AUTH_FAILED",
+                        cause=f"Persistent 401 on bookmark fetch (cursor={cursor!r}): {e}",
+                        attempted=f"client.users.get_bookmarks(id={user_id})",
+                        next_action="Re-run `python -m xsensai.sync.setup_oauth` to re-authorize.",
+                        retryable=True,
                     )
                 raise
 
@@ -352,19 +385,39 @@ class XClient:
             return ThreadFetchResult(status="unknown_empty")
 
         # Step 2: search_all (graceful degradation)
+        # F9 fix: AUTH_FAILED is propagated loudly. The original logic conflated
+        # tier-gating (403 from search_all because the tier doesn't include it)
+        # with auth failure (the user's token is broken). The latter would
+        # silently produce incomplete cards on every bookmark — much worse
+        # than a loud failure.
         try:
             replies = self._search(
                 client, "all", query, max_results=max_replies,
             )
         except XSensaiError as e:
-            # Distinguish 403 (tier-gated) from real error.
-            if e.code == "AUTH_FAILED" or "403" in (e.details or "") or "unauthorized" in (e.cause or "").lower():
+            if e.code == "AUTH_FAILED":
+                # Token is broken — DO NOT silently mask. Propagate so the
+                # outer run() can fail loudly with the right envelope.
+                raise
+            # Tier-gated (403/forbidden) vs real error: only the tier case
+            # gets outside_window + search_all_unavailable flag.
+            details_or_cause = (e.details or "") + " " + (e.cause or "").lower()
+            if "403" in details_or_cause or "forbidden" in details_or_cause.lower():
                 self._search_all_unavailable_reported = True
                 return ThreadFetchResult(status="outside_window", search_all_unavailable=True)
             return ThreadFetchResult(status="failed")
         except Exception as e:
             err_str = str(e).lower()
-            if "403" in err_str or "unauthorized" in err_str or "forbidden" in err_str:
+            if "401" in err_str or "unauthorized" in err_str:
+                # Same: 401 mid-search_all means the token died. Propagate.
+                raise XSensaiError(
+                    code="AUTH_FAILED",
+                    cause=f"search_all returned 401: {e}",
+                    attempted=f"posts.search_all(query=...) for thread fetch",
+                    next_action="Re-run `python -m xsensai.sync.setup_oauth` to re-authorize.",
+                    retryable=True,
+                )
+            if "403" in err_str or "forbidden" in err_str:
                 self._search_all_unavailable_reported = True
                 return ThreadFetchResult(status="outside_window", search_all_unavailable=True)
             log.warning("search_all unhandled error: %s", e)

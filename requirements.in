@@ -15,6 +15,13 @@ regex>=2024.0
 # next major to avoid silent breaking changes in transitive surface.
 xdk>=0.1.0,<1.0
 
+# Slice 4: macOS Keychain access via Security.framework (PyObjC). Used so the
+# refresh token is never exposed via argv during `security add-generic-password`
+# (which would leak it to `ps -ef` for ~50ms per write — fine for single-user
+# laptops, real risk for shared hosts). Cross-platform; on macOS uses
+# Security.framework, on other platforms it picks the appropriate backend.
+keyring>=24.0,<26.0
+
 # Test
 pytest>=8.0
 pytest-asyncio>=0.24
