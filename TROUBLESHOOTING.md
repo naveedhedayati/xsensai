@@ -269,8 +269,19 @@ Verify preconditions WITHOUT burning a token first: `python -m xsensai.sync.setu
 
 ## `[OAUTH_CLIENT_ID_MISSING]` — no client_id
 
-Same diagnosis as `OAUTH_SETUP_REQUIRED`: you need an X dev app's client_id
-exported via `XSENSAI_X_CLIENT_ID` (or `--client-id` flag). See above.
+You need an X dev app's client_id. Two ways to provide it:
+
+1. **Recommended (set-and-forget):** run `python -m xsensai.sync.setup_oauth`
+   once with `--client-id <your-id>` (or with `XSENSAI_X_CLIENT_ID` exported).
+   It persists the value to macOS Keychain alongside the refresh token, so
+   future `/xsync` calls from any Claude Code session "just work" without
+   re-exporting the env var.
+2. **Per-shell:** export `XSENSAI_X_CLIENT_ID=<your-id>` in the shell that
+   launches Claude Code. (Doesn't carry into a fresh `claude` invocation
+   from a different terminal — that's why option 1 exists.)
+
+If you already ran setup_oauth but `/xsync` still complains, your Keychain
+entry may be stale. Re-run `python -m xsensai.sync.setup_oauth` to refresh it.
 
 ## `[OAUTH_PORT_COLLISION]` — could not bind localhost port
 
@@ -292,9 +303,57 @@ Either:
 
 ## `[OAUTH_KEYCHAIN_BLOCKED]` — Keychain ACL or prompt issue
 
-The macOS Keychain refused the read or write. Open Keychain Access app, find
-the `x-sensai` entry, grant the calling Python access. If the entry is
-corrupt, delete it and re-run `setup_oauth`.
+The macOS Keychain refused the read or write. x-sensai stores up to 3
+entries under service `x-sensai`:
+- `x-api-refresh-token` (always)
+- `x-api-client-id` (after first successful setup_oauth)
+- `x-api-client-secret` (only for Confidential clients)
+
+Open Keychain Access, search for "x-sensai", and grant the calling Python
+access. If any entry is corrupt, delete it and re-run `setup_oauth`. If
+the `keyring` library itself is the problem, verify the backend:
+
+```bash
+python -c "import keyring; print(keyring.get_keyring())"
+```
+
+Should print a macOS-keychain backend on macOS.
+
+## Browser shows "Something went wrong" during setup_oauth
+
+You opened the OAuth URL but X redirected to a "Something went wrong" page
+without sending you back to localhost. This is a callback URL mismatch.
+
+**Fix:** the X dev portal stores an exact-match callback URL (no wildcards).
+`setup_oauth` binds to `http://127.0.0.1:8765/callback` by default.
+
+1. Open https://developer.x.com → your app → User authentication settings.
+2. In "Callback URI / Redirect URL", set exactly: `http://127.0.0.1:8765/callback`
+3. Save, then re-run `python -m xsensai.sync.setup_oauth`.
+
+If port 8765 is taken, override with `--port <free-port>` and update the
+dev portal to match the same port.
+
+## `[AUTH_FAILED]` — `client_secret is required for token refresh`
+
+Your X dev app is registered as a Confidential Client (the dev portal's
+"Web App" type). Confidential clients need a client_secret in addition to
+the PKCE flow; Public Clients (Native App / Single Page App) don't.
+
+**Fix:**
+1. In the X dev portal, find your app's client_secret (rotate-and-copy if
+   you've never viewed it).
+2. Re-run setup with the secret:
+   ```bash
+   python -m xsensai.sync.setup_oauth --client-secret <your-secret>
+   ```
+   Or export `XSENSAI_X_CLIENT_SECRET=<your-secret>` first.
+3. The secret is persisted to Keychain (account `x-api-client-secret`),
+   so future `/xsync` calls find it automatically.
+
+Alternative: change your dev app type to Native App or Single Page App
+(Public Client) — then no client_secret is needed and you can re-run
+setup_oauth without `--client-secret`.
 
 ## `[X_API_RATE_LIMITED]` — 429 after 3 backoffs
 
