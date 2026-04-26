@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # dev_refresh.sh — one-shot post-merge refresh for the local install.
 #
-# Slice 2 added 3 new slash commands + 6 new MCP tools. After a merge,
-# you need to (a) git pull, (b) re-install the package, (c) copy the new
-# slash commands to ~/.claude/commands/, and (d) restart both Claude
-# Desktop (for new MCP tools) and Claude Code (for new slash commands).
-# This script handles a-c idempotently and prints the restart checklist.
+# After a merge: (a) git pull, (b) re-install the package, (c) copy slash
+# commands to ~/.claude/commands/, and (d) restart both Claude Desktop (for
+# new MCP tools) and Claude Code (for new slash commands). This script
+# handles a-c idempotently and prints the restart checklist.
 
 set -euo pipefail
 
@@ -23,13 +22,25 @@ else
 fi
 echo
 
-# Step 2: pip install -e . (picks up Slice 2 src/ changes)
+# Step 2: install -e . (picks up src/ changes). Detect pip vs uv-venv —
+# uv-created venvs don't ship pip by default, so fall back to `uv pip` when
+# the in-venv pip is missing.
 if [ -d "$REPO_ROOT/.venv" ]; then
-  echo "==> pip install -e . (refreshing package)"
-  "$REPO_ROOT/.venv/bin/pip" install -e "$REPO_ROOT" --quiet
+  echo "==> install -e . (refreshing package)"
+  if [ -x "$REPO_ROOT/.venv/bin/pip" ]; then
+    "$REPO_ROOT/.venv/bin/pip" install -e "$REPO_ROOT" --quiet
+  elif command -v uv >/dev/null 2>&1; then
+    VIRTUAL_ENV="$REPO_ROOT/.venv" uv pip install -e "$REPO_ROOT" --quiet
+  else
+    echo "    ERROR: .venv has no pip and uv is not installed."
+    echo "    Either: $REPO_ROOT/.venv/bin/python -m ensurepip"
+    echo "    Or:     install uv (https://docs.astral.sh/uv/)"
+    exit 1
+  fi
 else
-  echo "==> WARN: no .venv found; skipping pip install. Set up venv with:"
+  echo "==> WARN: no .venv found; skipping install. Set up venv with one of:"
   echo "    python -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/pip install -e ."
+  echo "    uv venv && VIRTUAL_ENV=.venv uv pip install -r requirements.txt && VIRTUAL_ENV=.venv uv pip install -e ."
 fi
 echo
 
@@ -46,28 +57,27 @@ if [ -x "$REPO_ROOT/.venv/bin/xsensai-mcp" ]; then
 fi
 echo
 
-# Step 5: print the restart checklist
+# Step 5: print the restart checklist (slice-agnostic — won't rot per slice)
 cat <<'EOF'
 ==> NEXT STEPS
 
 You must restart these two apps for new functionality to surface:
 
-  1. Claude Desktop  — picks up new MCP tools (paste_bookmark, set_pin,
-                       annotate_card, list_pinned, due_cards_for_review,
-                       recover_aborted_paste)
+  1. Claude Desktop  — picks up new MCP tools.
                        Quit + relaunch from /Applications.
+                       Verify: ask Claude "list your MCP tools" and check
+                       that xsensai tools appear (any of search_bookmarks,
+                       paste_bookmark, set_pin, xask_capabilities, etc.).
 
-  2. Claude Code     — picks up new slash commands (/xpaste, /xnote, /xpin)
-                       Restart your terminal session, OR reload commands
-                       via /commands inside Claude Code.
+  2. Claude Code     — picks up new slash commands.
+                       Restart your terminal session, OR reload via the
+                       /commands UI inside Claude Code.
 
 After restart, smoke test in Claude Code:
 
-  /xpaste            → step through the paste flow with any short content
-                       end with "y" to confirm. Card lands on disk.
-  /xfind <keyword>   → finds the card you just pasted (first /xfind after
-                       a paste runs ~5s reindex, then unlinks marker)
-  /xpin list         → shows current pins (empty initially; pin one to test)
+  /xhelp             → lists the current command surface for THIS slice.
+                       (If /xhelp is missing, restart didn't take.)
+  /xfind <keyword>   → fast retrieval; verifies the read path is healthy.
 
 If something doesn't work, check TROUBLESHOOTING.md (project root) keyed
 by error code.
