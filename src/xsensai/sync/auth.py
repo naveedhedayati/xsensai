@@ -31,8 +31,10 @@ from xsensai.errors import XSensaiError
 KEYCHAIN_SERVICE_NAME = "x-sensai"
 KEYCHAIN_ACCOUNT_NAME = "x-api-refresh-token"
 KEYCHAIN_CLIENT_ID_ACCOUNT = "x-api-client-id"
+KEYCHAIN_CLIENT_SECRET_ACCOUNT = "x-api-client-secret"
 ENV_VAR_NAME = "XSENSAI_X_REFRESH_TOKEN"
 CLIENT_ID_ENV = "XSENSAI_X_CLIENT_ID"
+CLIENT_SECRET_ENV = "XSENSAI_X_CLIENT_SECRET"
 
 
 @runtime_checkable
@@ -224,15 +226,71 @@ def store_client_id(client_id: str) -> None:
         )
 
 
+def get_stored_client_secret() -> Optional[str]:
+    """Resolve the X dev app client_secret (only required for Confidential
+    OAuth 2.0 clients — Public Clients don't need a secret per PKCE).
+
+    Resolution order:
+      1. ${XSENSAI_X_CLIENT_SECRET} env var
+      2. macOS Keychain at service=x-sensai, account=x-api-client-secret
+      3. None (Public Client; PKCE without secret is fine)
+
+    Most personal-tool X dev apps end up Confidential because the X dev
+    portal defaults to "Web App" type. Switching to Native App / Single
+    Page App (Public Client) avoids needing a secret, but most users
+    won't realize that until they hit the auth failure.
+    """
+    env_val = os.environ.get(CLIENT_SECRET_ENV, "").strip()
+    if env_val:
+        return env_val
+    try:
+        import keyring  # type: ignore[import-untyped]
+        kc = keyring.get_password(KEYCHAIN_SERVICE_NAME, KEYCHAIN_CLIENT_SECRET_ACCOUNT)
+        if kc and kc.strip():
+            return kc.strip()
+    except Exception:
+        pass
+    return None
+
+
+def store_client_secret(client_secret: str) -> None:
+    """Persist the X dev app client_secret to Keychain (Confidential clients only).
+
+    Public Clients (Native App / Single Page App) don't need this. Called
+    by setup_oauth when the user provides --client-secret or the env var
+    is set.
+    """
+    if not client_secret:
+        raise ValueError("Refusing to store an empty client_secret.")
+    try:
+        import keyring  # type: ignore[import-untyped]
+        keyring.set_password(KEYCHAIN_SERVICE_NAME, KEYCHAIN_CLIENT_SECRET_ACCOUNT, client_secret)
+    except Exception as e:
+        raise XSensaiError(
+            code="OAUTH_KEYCHAIN_BLOCKED",
+            cause=f"Could not persist client_secret to Keychain: {type(e).__name__}: {e}",
+            attempted=f"keyring.set_password({KEYCHAIN_SERVICE_NAME!r}, {KEYCHAIN_CLIENT_SECRET_ACCOUNT!r}, ...)",
+            next_action=(
+                "OAuth still succeeded; you can use /xsync by exporting "
+                f"{CLIENT_SECRET_ENV} in your shell instead."
+            ),
+            retryable=True,
+        )
+
+
 __all__ = [
     "TokenProvider",
     "KeychainTokenProvider",
     "EnvSecretTokenProvider",
     "get_stored_client_id",
     "store_client_id",
+    "get_stored_client_secret",
+    "store_client_secret",
     "KEYCHAIN_SERVICE_NAME",
     "KEYCHAIN_ACCOUNT_NAME",
     "KEYCHAIN_CLIENT_ID_ACCOUNT",
+    "KEYCHAIN_CLIENT_SECRET_ACCOUNT",
     "ENV_VAR_NAME",
     "CLIENT_ID_ENV",
+    "CLIENT_SECRET_ENV",
 ]

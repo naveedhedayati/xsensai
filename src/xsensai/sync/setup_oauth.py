@@ -206,12 +206,19 @@ def main(argv: Optional[list] = None) -> int:
                         help="Print the auth URL instead of auto-opening the browser")
     parser.add_argument("--client-id", default=None,
                         help=f"X dev app client_id (overrides ${CLIENT_ID_ENV})")
+    parser.add_argument("--client-secret", default=None,
+                        help=f"X dev app client_secret — REQUIRED for Confidential clients "
+                        f"(X dev portal 'Web App' type). Public Clients (Native App / SPA) "
+                        f"don't need this. Overrides $XSENSAI_X_CLIENT_SECRET.")
     parser.add_argument("--port", type=int, default=None,
                         help=f"Callback port (overrides ${PORT_ENV}; default {DEFAULT_CALLBACK_PORT}). "
                         f"MUST match what's registered in your X dev portal.")
     args = parser.parse_args(argv)
 
     client_id = args.client_id or os.environ.get(CLIENT_ID_ENV, "").strip() or None
+    # Confidential clients only — Public Clients leave this None.
+    from xsensai.sync.auth import CLIENT_SECRET_ENV
+    client_secret = args.client_secret or os.environ.get(CLIENT_SECRET_ENV, "").strip() or None
 
     if args.check:
         return _check_preconditions(client_id=client_id)
@@ -273,11 +280,16 @@ def main(argv: Optional[list] = None) -> int:
     state = secrets.token_urlsafe(32)
     log.info("OAuth callback server bound to %s", redirect_uri)
 
-    client = xdk.Client(
-        client_id=client_id,
-        redirect_uri=redirect_uri,
-        scope=DEFAULT_SCOPES,
-    )
+    # Build XDK kwargs conditionally — only thread client_secret for
+    # Confidential clients. Public Clients (Native App / SPA) don't need it.
+    xdk_kwargs = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "scope": DEFAULT_SCOPES,
+    }
+    if client_secret:
+        xdk_kwargs["client_secret"] = client_secret
+    client = xdk.Client(**xdk_kwargs)
     try:
         auth_url = client.get_authorization_url(state=state)
     except Exception as e:
@@ -393,19 +405,23 @@ def main(argv: Optional[list] = None) -> int:
         print(e.format(), file=sys.stderr)
         return 5
 
-    # Also persist the client_id in Keychain so /xsync from Claude Code
-    # (which doesn't inherit shell env vars) can find it without the
-    # user having to add an `export` to their shell rc.
+    # Also persist the client_id (and client_secret if Confidential) in
+    # Keychain so /xsync from Claude Code (which doesn't inherit shell
+    # env vars) can find them without the user having to add `export`
+    # lines to their shell rc.
     try:
-        from xsensai.sync.auth import store_client_id
+        from xsensai.sync.auth import store_client_id, store_client_secret
         store_client_id(client_id)
+        if client_secret:
+            store_client_secret(client_secret)
     except XSensaiError as e:
-        # Non-fatal — OAuth succeeded; user can fall back to env var.
+        # Non-fatal — OAuth succeeded; user can fall back to env vars.
         print(e.format(), file=sys.stderr)
 
+    secret_note = " + client_secret" if client_secret else ""
     print()
     print("✅ x-sensai OAuth setup complete.")
-    print(f"   Refresh token + client_id stored in Keychain ({KEYCHAIN_SERVICE_NAME}/*).")
+    print(f"   Refresh token + client_id{secret_note} stored in Keychain ({KEYCHAIN_SERVICE_NAME}/*).")
     print()
     print("Next: run /xsync in Claude Code to fetch your bookmarks.")
     print("(No shell env vars needed — everything's in Keychain.)")

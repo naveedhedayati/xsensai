@@ -93,10 +93,20 @@ class XClient:
         token_provider: TokenProvider,
         client_id: str,
         *,
+        client_secret: Optional[str] = None,
         xdk_client_factory: Any = None,  # for tests; defaults to xdk.Client
     ) -> None:
         self._token_provider = token_provider
         self._client_id = client_id
+        # Confidential OAuth 2.0 clients (X dev portal "Web App" type) need
+        # a client_secret in addition to client_id for the refresh exchange.
+        # Public Clients (Native App / Single Page App) don't — PKCE is
+        # sufficient. We try without secret first; if not provided, the
+        # auth helper looks it up from keychain/env. None = Public Client.
+        if client_secret is None:
+            from xsensai.sync.auth import get_stored_client_secret
+            client_secret = get_stored_client_secret()
+        self._client_secret = client_secret
         self._xdk_client: Optional[Any] = None
         self._user_id: Optional[str] = None
         self._search_all_unavailable_reported = False
@@ -115,10 +125,16 @@ class XClient:
             return self._xdk_client
 
         refresh_tok = self._token_provider.get_refresh_token()
-        self._xdk_client = self._xdk_client_factory(
-            client_id=self._client_id,
-            token={"refresh_token": refresh_tok, "access_token": ""},
-        )
+        # Build kwargs conditionally — client_secret is only included for
+        # Confidential clients; Public Clients leave it None and PKCE alone
+        # carries auth.
+        xdk_kwargs: Dict[str, Any] = {
+            "client_id": self._client_id,
+            "token": {"refresh_token": refresh_tok, "access_token": ""},
+        }
+        if self._client_secret:
+            xdk_kwargs["client_secret"] = self._client_secret
+        self._xdk_client = self._xdk_client_factory(**xdk_kwargs)
 
         try:
             new_token = self._xdk_client.refresh_token()
