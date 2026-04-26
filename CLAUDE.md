@@ -18,7 +18,7 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 
 1. **Slice 0** — spikes + skeleton + `ping` smoke + `errors.py`. **Shipped (v0.1.0).**
 2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Shipped (v0.2.0.0).**
-3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`.
+3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`. **Shipped (v0.3.0.0).**
 4. **Slice 3** — `/xask` + last30days web fork + synthesis + LLM re-rank.
 5. **Slice 4** — XDK sync + `/xsync`.
 6. **Slice 5** — GitHub Actions cron.
@@ -30,6 +30,16 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 - `get_bookmark(id)` (MCP) fetches full card detail by id; ids are returned by `search_bookmarks` (= filename without `.md`).
 - `/xhelp` lists current + planned surface; static "Sync ships in Slice 4" footer (no `_sync-status.md` parsing yet).
 - v1 read adapter loads existing v1-shape cards (no `raw_path`/`raw_checksum`) in-memory. No write-back. Deleted in Slice 6.
+
+## Slice 2 — what works
+
+- `/xpaste` (Claude Code) and `paste_bookmark` (MCP) save a pasted tweet/thread as a v2 card via the conversational flow. Empty/abort spills to `00_inbox/quick.md`; partial state is recoverable via `recover_aborted_paste` (+ wire-ups: `write_paste_snapshot`, `clear_paste_snapshot`, `list_recoverable_pastes`, `get_aborted_paste`).
+- `/xnote` (Claude Code) and `annotate_card` (MCP) append a timestamped block to an existing card's `## Notes` section. v1 cards reject the mutation with `[V1_MUTATION_BLOCKED]` until Slice 6 migrates them.
+- `/xpin` (Claude Code) and `set_pin` / `list_pinned` / `due_cards_for_review` (MCP) toggle/list pins and surface cards due for re-review (+ wire-ups: `get_review_cursor`, `set_review_cursor`).
+- Concurrency: `xsensai.locks.filelock` provides a `card_write` lock via `fcntl.flock` with a UUID4 fencing token. Atomic write helper `durable_replace` uses `F_FULLFSYNC` on macOS for crash-safe sidecar writes.
+- Read-side reindex trigger: a `/xpaste` followed immediately by `/xfind` round-trips in one session (QMD `update` is invoked on the read path, coalesced).
+- `XSensaiError` codes added: `V1_MUTATION_BLOCKED`, `USER_CONFIRMATION_REQUIRED`.
+- New helper script: `scripts/dev_refresh.sh` (re-installs commands + restarts MCP for fast local iteration).
 
 ## Slice 1 — config
 
@@ -87,7 +97,7 @@ The corpus lives in `/Users/naveedhedayati/Documents/Vault/04_areas/x-bookmarks/
 
 - **Pre-merge:** `pytest` (CI runs on every push; gated on PR before merge)
 - **Deploy trigger:** `./scripts/install_commands.sh` (manual, post-merge, per-machine)
-- **Deploy status:** MCP `tools/list` returns `search_bookmarks` + `get_bookmark` + `ping`
+- **Deploy status:** MCP `tools/list` returns `search_bookmarks` + `get_bookmark` + `ping` + Slice 2 tools (`paste_bookmark`, `recover_aborted_paste`, `annotate_card`, `set_pin`, `list_pinned`, `due_cards_for_review`, plus 6 wire-ups)
 - **Health check:** `XSENSAI_RUN_INTEGRATION=1 pytest tests/eval/golden_set.py` (top-3 ≥ 80%)
 - **Post-deploy verification:** in Claude Code, type `/xfind` and confirm a query returns hits
 
