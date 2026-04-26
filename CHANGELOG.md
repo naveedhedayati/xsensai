@@ -2,6 +2,132 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.5.0.0] - 2026-04-26
+
+Slice 4 — `/xsync` + `/xextract` ship. After this release, you can pull
+new bookmarks from X into your corpus on demand. Cron automation lands in
+Slice 5; the orchestrator was designed headless-runnable from day one
+(/autoplan UC-1=C) so Slice 5 will be "wire up the schedule," not "rewrite
+the orchestrator."
+
+Smart-default extraction (UC-2=C): if `/xsync` finds ≤5 new cards, your
+host Claude Code session writes the `retrieval_summary` + `retrieval_tags`
+inline (snappy). If >5, the cards land with `extraction_pending: true` and
+you run `/xextract` later to backfill (no grinding wait on big backfills).
+
+### Added
+
+- **`/xsync` slash command**: one-prompt conversational flow, no flags
+  (per CLAUDE.md:90). Modes: since-last-run / backlog / single / preview.
+  Inline modifiers: `inline`, `defer`, `commit`, `proceed dirty`. Smart
+  default per N≤5/N>5. Per-5-card progress emits during long runs (DX5
+  carve-out from /xask's DX8 silence).
+- **`/xextract` slash command** (NEW): drains cards with
+  `extraction_pending: true`. One-prompt flow per Slice 1+3 precedent.
+  Modes: backlog / single / numeric-limit / retry-failed.
+- **`xsensai.sync` package** (8 new modules):
+  - `service`: single-process orchestrator (E-1 fix). 4 Python entry
+    points (`run`, `apply_extraction`, `finalize_run`, `extract_pending`)
+    + matching CLI subcommands.
+  - `client`: XClient wrapping XDK with auth refresh + rate-limit backoff
+    + Spike #6b graceful degradation in `get_thread()` (search_recent →
+    search_all on >7-day-old bookmarks → outside_window envelope on 403).
+  - `auth`: TokenProviderProtocol + KeychainTokenProvider (manual mode) +
+    EnvSecretTokenProvider (Slice 5 cron-ready).
+  - `extraction`: `Extractor` protocol with `extract_batch()` (E-1 shape
+    fix). HostExtractor produces per-card prompts; DeferredExtractor
+    no-ops with pending=True for all.
+  - `card_writer`: XDK dict → v2 LoadedCard with `extraction_pending=True`
+    invariant at write (E-4 ordering). Author handle sanitized via
+    `_safe_handle()` (E-5 defense).
+  - `dedup`: `existing_source_ids()` unions parsed-card source_ids +
+    filename regex (catches malformed-on-disk cards).
+    `source_id_exists_under_lock()` is the S-7 race fix.
+  - `checkpoint`: append-on-success JSONL; archives to
+    `~/.cache/xsensai/sync-checkpoints/` with 30-day retention (S-5 fix).
+  - `heartbeat`: `_sync-status.md` write/read; banner threshold logic;
+    `threads_permanently_unfetched` cumulative metric (auto-decision #6).
+- **`xsensai.sync.git_check`**: vault cleanliness check + opt-in
+  `commit` keyword. Cleans `[INFO/VAULT_DIRTY_FIRST_RUN]` on first run +
+  `--proceed-dirty` escape hatch (S-10 fix). All subprocess calls use
+  argv list + `--` separator; paths validated via `_assert_inside_corpus`
+  (E-5 defense).
+- **`xsensai.sync.setup_oauth`**: minimal one-shot PKCE flow.
+  127.0.0.1 ephemeral port, state-parameter CSRF defense (E-5).
+  `--check` (preconditions only), `--dry-run` (no token write),
+  `--copy-url` (manual browser fallback). 4 dedicated error envelopes.
+- **`xsensai.sync.log`**: privacy-aware JSONL run log mirroring xask.log.
+  Default mode `hash_only`; `XSENSAI_XSYNC_LOG_MODE=full` to opt in.
+  `python -m xsensai.sync.log purge` honors retention env.
+- **`xsensai.locks` extension**: `LockDomain` enum (`card_write`,
+  `index_rebuild`); `with_index_rebuild_lock()` with optional heartbeat
+  thread (E-2 fix: heartbeat is diagnostics-only; flock is the truth;
+  `threading.excepthook` installed globally to surface daemon-thread failures).
+- **Schema additions** (S-8 fix — was missing from original Modify list):
+  `thread_fetch_status`, `xsync_run_id` on `CardFrontmatter`. Forward-
+  compat: old cards without these fields still load.
+- **17 new error/info codes**: 6 OAuth-lifecycle errors (`OAUTH_*`),
+  `X_API_RATE_LIMITED`, `X_API_NETWORK_ERROR`, `SYNC_LOCK_HELD`,
+  `CORPUS_UNREACHABLE`, `INVALID_FLAGS`; 18 INFO codes covering sync
+  lifecycle, thread-fetch outcomes, git surface.
+- **Live integration smoke** (gated on `XSENSAI_RUN_LIVE_X_API=1`): manual
+  end-to-end test against the user's real X account. See
+  `tests/manual/SLICE_4_GAUNTLET.md` (~30 items).
+- **Tests**: +110 across 13 new test files. All 465+ tests pass.
+
+### Changed
+
+- `model/card.py`: 2 new fields (`thread_fetch_status`, `xsync_run_id`).
+  `populate_by_name=True` on `CardFrontmatter` so the alias `_xsync_run_id`
+  works both ways.
+- `errors.py`: 11 new ErrorCode entries + 18 new InfoCode entries.
+- `locks/filelock.py`: `LockDomain` enum + new `with_index_rebuild_lock()`
+  context manager. `WriterKind` adds `xextract`. Existing `card_write`
+  helpers unchanged (Slice 2 callers untouched).
+- `commands/xhelp.md`: `/xsync` + `/xextract` listed; full inline-override
+  vocab section; sync-status banner integration documented.
+- `commands/xfind.md`: cross-references the sync-status banner from
+  `_sync-status.md` (read post-Slice-4).
+- `requirements.in`: `xdk>=0.1.0,<1.0`. `requirements.txt` recompiled
+  with hashes via `uv pip compile --generate-hashes`.
+- `scripts/install_commands.sh`: data-driven from `commands/*.md` glob
+  (D-7 fix). No more hand-maintained "Available:" footer.
+- `scripts/dev_refresh.sh`: pre-Slice-4 micro-PR fixed uv-venv vs
+  python-venv handling + made the NEXT STEPS message slice-agnostic
+  (commit `77d0316` on main).
+
+### Spec deviations (acknowledged + load-bearing)
+
+1. **Manual `/xsync` only this slice**; cron is Slice 5 (UC-1=C answered C
+   in /autoplan: design extraction.py + lock semantics for headless-runnable
+   so Slice 5 = "wire up the schedule," not "rewrite the orchestrator").
+2. **Smart-default extraction** instead of always-inline (UC-2=C). Mirrors
+   the spec's existing `defer if N>5` pattern from `/xnote review`.
+3. **Cleanliness check + opt-in `commit`** instead of always-auto-commit
+   (UC-3=C). Respects existing manual git workflow; warns + opt-in for
+   the laptop→phone→laptop cross-machine scenario.
+4. **`_sync-status.md` is committed, not gitignored** (D-S3 fix —
+   promoted from taste decision to auto-decided): cron's heartbeat must
+   be readable on the user's laptop after `git pull`.
+5. **No `posts.search_all` tier verification at slice time**; graceful
+   degradation in `client.get_thread()` handles 403 by emitting
+   `[INFO/SEARCH_ALL_UNAVAILABLE]` once per session.
+
+### Known limitations
+
+- **`/xsync single`** is stubbed in this slice — XDK's bookmark endpoint
+  doesn't expose single-bookmark fetch; supporting single mode would
+  need a separate `/2/tweets/{id}` integration. Slice 4.5 candidate.
+- **Threads for bookmarks >7 days old** can't always be back-fetched.
+  `search_recent` returns empty for old conversations. The graceful-
+  degradation path tries `search_all` once but it may 403 on tier
+  restrictions. The card is still saved with the bookmarked tweet's
+  text; only the OP reply chain may be missing. `thread_fetch_status:
+  outside_window` records this on the card.
+- **Git push** is NOT invoked by `/xsync --commit`. The user pushes
+  manually (or Slice 5 cron will). Cross-host conflict resolution
+  (`_conflicts.md`, pull-rebase) is Slice 5 work.
+
 ## [0.4.0.0] - 2026-04-26
 
 Slice 3 — `/xask` ships. After this release, you can ask grounded questions
