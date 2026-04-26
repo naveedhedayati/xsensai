@@ -41,12 +41,27 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 - `XSensaiError` codes added: `V1_MUTATION_BLOCKED`, `USER_CONFIRMATION_REQUIRED`.
 - New helper script: `scripts/dev_refresh.sh` (re-installs commands + restarts MCP for fast local iteration).
 
+## Slice 3 — what works
+
+- `/xask` (Claude Code) is the thinking-session command. Single prompt: "What's your question?" plus inline override keywords. Calls a thin Python orchestrator (`xsensai.xask.service`) that pulls top-20 candidates from `search_bookmarks`, optionally forks `last30days` for this-week web context (with 20s soft deadline), deterministically re-ranks to top-3, and assembles a synthesis prompt with `<DATA_TO_ANALYZE>` injection-defense wrap + locked output template + hard rules. The host Claude Code session does the synthesis (no server-side LLM, no API keys, no cost accounting). Output template enforced via `xsensai.synthesis.template.validate()` with one re-prompt on failure.
+- `xask_capabilities()` (MCP, read-only) exposes deploy-status info: `{ok, version, prompt_template_version, web_fork_available, web_fork_path, log_path, log_mode}`. Used by `/xhelp` and post-merge health checks.
+- Privacy-aware question log at `~/.cache/xsensai/xask-log.jsonl` (mode 0600, dir 0700). Default `hash_only` mode logs `q_hash` + meta but NOT raw question text. `XSENSAI_XASK_LOG_MODE=full` to log text. `python -m xsensai.xask.log purge` honors `XSENSAI_XASK_LOG_RETENTION_DAYS`.
+- `XSensaiInfo` envelope (sibling of `XSensaiError`) for non-error status lines (web miss / empty / parse / no_corpus_match / challenge_no_dissent). Renders as `[INFO/CODE] {cause}\n{action_or_note}\nSource: {source}` — same contract discipline as errors.
+- 5 prompt-injection adversarial fixtures at `tests/fixtures/prompt_injection/` with canary strings; live integration test (`tests/test_xask_injection_live.py`, gated on `XSENSAI_RUN_INTEGRATION=1`) asserts canaries stay inside `<DATA_TO_ANALYZE>` boundaries.
+
 ## Slice 1 — config
 
 - **`XSENSAI_CORPUS_PATH`** (default `~/Documents/Vault/04_areas/x-bookmarks/`) — where cards live.
 - **`XSENSAI_QMD_PATH`** (default `/Users/naveedhedayati/.bun/bin/qmd`) — QMD binary.
-- **`XSENSAI_RUN_INTEGRATION=1`** — enables QMD-dependent integration + golden-eval tests.
+- **`XSENSAI_RUN_INTEGRATION=1`** — enables QMD-dependent integration + golden-eval tests + live injection regression test.
 - **QMD collection name:** `xsensai-cards` (created by `scripts/bootstrap_qmd.sh`).
+
+## Slice 3 — config
+
+- **`XSENSAI_LAST30DAYS_PATH`** (default `~/.claude/skills/last30days/scripts/last30days.py`) — path to the `last30days` skill script that `/xask` shells out to for web context.
+- **`XSENSAI_XASK_WEB_TIMEOUT_S`** (default `20`) — soft deadline for the web fork. On timeout, output renders `## (web context unavailable this run — timeout)`.
+- **`XSENSAI_XASK_LOG_MODE`** (default `hash_only`) — `off` | `hash_only` | `full`. Privacy default strips question text; `full` logs raw text for empirical steering.
+- **`XSENSAI_XASK_LOG_RETENTION_DAYS`** (default `90`) — purge threshold for `python -m xsensai.xask.log purge`.
 
 ## /xfind override vocabulary
 
@@ -55,6 +70,16 @@ Append to your query:
 - `skip pins` — exclude pinned cards from results
 
 Override fuzzy match: if you say "no recency" or "no pins", `/xfind` will note the canonical phrasing and run with defaults.
+
+## /xask override vocabulary
+
+Append to your question:
+- `no decay` — disable recency weighting on retrieval
+- `skip pins` — exclude pinned cards from retrieval
+- `no web` — skip the `last30days` web fork entirely
+- `challenge` — run an extra retrieval pass that hunts for a dissenting card
+
+Override fuzzy match: if you say `dissent`, `recency`, `web off`, etc., `/xask`'s service detects the canonical phrase, applies the override, and prepends a one-line note to your output mapping the fuzzy phrase to the canonical token.
 
 ## Rules of the road
 
@@ -97,7 +122,7 @@ The corpus lives in `/Users/naveedhedayati/Documents/Vault/04_areas/x-bookmarks/
 
 - **Pre-merge:** `pytest` (CI runs on every push; gated on PR before merge)
 - **Deploy trigger:** `./scripts/install_commands.sh` (manual, post-merge, per-machine)
-- **Deploy status:** MCP `tools/list` returns `search_bookmarks` + `get_bookmark` + `ping` + Slice 2 tools (`paste_bookmark`, `recover_aborted_paste`, `annotate_card`, `set_pin`, `list_pinned`, `due_cards_for_review`, plus 6 wire-ups)
+- **Deploy status:** MCP `tools/list` returns `search_bookmarks` + `get_bookmark` + `ping` + Slice 2 tools (`paste_bookmark`, `recover_aborted_paste`, `annotate_card`, `set_pin`, `list_pinned`, `due_cards_for_review`, plus 6 wire-ups) + Slice 3 tool `xask_capabilities`
 - **Health check:** `XSENSAI_RUN_INTEGRATION=1 pytest tests/eval/golden_set.py` (top-3 ≥ 80%)
 - **Post-deploy verification:** in Claude Code, type `/xfind` and confirm a query returns hits
 

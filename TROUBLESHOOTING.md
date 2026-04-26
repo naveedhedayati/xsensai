@@ -139,6 +139,79 @@ If you have v1 cards in there, the v1 adapter loads them automatically (no actio
 
 ---
 
+## /xask
+
+### `[WEB_FORK_FAILED]`
+
+**Cause:** the `last30days` subprocess crashed, returned non-zero, or its output didn't parse.
+
+**Fix:**
+1. Verify `last30days` is installed: `ls $XSENSAI_LAST30DAYS_PATH` (default `~/.claude/skills/last30days/scripts/last30days.py`).
+2. Verify it's owned by you: `ls -l $XSENSAI_LAST30DAYS_PATH` — if not, the runner refuses to execute it (env-allowlist security).
+3. Re-run with `/xask <q> no web` to skip web entirely.
+4. Investigate the skill itself: try invoking it directly outside `/xask`.
+
+### `[EMPTY_CORPUS]`
+
+**Cause:** your corpus directory has zero loadable cards.
+
+**Fix:**
+- Run `/xpaste` to add cards manually, or
+- Check `$XSENSAI_CORPUS_PATH` points at the right vault directory: `echo $XSENSAI_CORPUS_PATH && ls "$XSENSAI_CORPUS_PATH"/*.md | head`.
+
+### `[TEMPLATE_VALIDATION_FAILED]`
+
+**Cause:** the host Claude session emitted output that did not match the locked `/xask` template after one re-prompt with stricter instructions.
+
+**Fix:**
+- The raw output is emitted under the banner — read it; usually still useful.
+- Check `~/.cache/xsensai/xask-log.jsonl` for the bisect record (q_hash + output_sha256 + prompt_template_version).
+- Re-run the same `/xask` query to retry. If it consistently fails on the same question, the prompt template may need a tweak (`src/xsensai/synthesis/template.py`).
+
+### `[INFO/NO_CORPUS_MATCH]`
+
+**Cause:** your question was processed but no cards in the corpus matched it. Not an error — just a "no hits" signal.
+
+**Fix:**
+- Try `/xfind <broader terms>` to explore.
+- Rephrase the question.
+- If you expected a hit, see "Tests pass but `/xfind` feels wrong" below.
+
+### `[INFO/WEB_TIMEOUT]`
+
+**Cause:** `last30days` exceeded `XSENSAI_XASK_WEB_TIMEOUT_S` (default 20s). Output renders corpus-only.
+
+**Fix:**
+- Re-run with `/xask <q> no web` if you don't want web context.
+- Bump the timeout: `XSENSAI_XASK_WEB_TIMEOUT_S=40 /xask <q>`.
+
+### `[INFO/WEB_PARSE]`
+
+**Cause:** `last30days` returned output that didn't parse as JSON. Likely a CLI shape change in the upstream skill.
+
+**Fix:**
+- Verify `last30days` install is current.
+- Re-run with `no web` to skip.
+- Investigate: invoke `last30days` directly with the same question and inspect stdout.
+
+### `[INFO/CHALLENGE_NO_DISSENT]`
+
+**Cause:** `/xask <q> challenge` ran the dissent-finding pass but the candidates surfaced were the same as the top-3. Not an error.
+
+**Fix:**
+- Your corpus may not contain a genuine dissenter on this topic. That's signal, not noise.
+
+### `/xask` log file & privacy
+
+The question log lives at `~/.cache/xsensai/xask-log.jsonl` with mode 0600 (dir 0700).
+
+- **Default mode is `hash_only`** — the log captures `q_hash` + meta but NOT raw question text (DX privacy default).
+- **Switch to full text logging:** `export XSENSAI_XASK_LOG_MODE=full` (e.g. for empirical steering of Slices 4-6).
+- **Disable entirely:** `export XSENSAI_XASK_LOG_MODE=off`.
+- **Purge old entries:** `python -m xsensai.xask.log purge` (honors `XSENSAI_XASK_LOG_RETENTION_DAYS`, default 90).
+
+---
+
 ## Slash commands (`/xfind`, `/xhelp`) don't appear in Claude Code
 
 **Cause:** install script didn't run, or you haven't restarted Claude Code.

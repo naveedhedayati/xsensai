@@ -75,8 +75,26 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 
 **Priority:** P3
 **Origin:** Slice 2 manual gauntlet (G30) + Codex adversarial review. `search_bookmarks` returns NO_RESULTS for queries containing underscores (e.g., `TEST_GAUNTLET deep work`) because QMD's BM25 doesn't split on `_`. Workaround: query without underscores. Real fix: query-side normalization or QMD config.
-**Description:** Either pre-process queries (split on `_` before passing to QMD) or look into QMD's tokenizer options. Affects discoverability of cards whose title/content has snake_case identifiers.
+**Description:** Either pre-process queries (split on `_` before passing to QMD) or look into QMD's tokenizer options. Affects discoverability of cards whose title/content has snake_case identifiers. Slice 3 considered fixing this incidentally inside `xask.service.parse_overrides` query normalization but deferred — this is a retrieval-layer concern, not /xask-specific.
 **Files:** [src/xsensai/retrieval/qmd.py](src/xsensai/retrieval/qmd.py), [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py)
+
+---
+
+## /xask (Slice 3 — shipped, future work)
+
+### Slice 3.5: server-side `ask_bookmarks` MCP tool for non-Claude-Code surfaces
+
+**Priority:** P3 (only if it becomes load-bearing)
+**Origin:** Slice 3 CEO autoplan reshape — synthesis-as-host-Claude-session ships now. The locked spec lists `ask_bookmarks(question, challenge, no_decay)` as a server-side MCP tool with synthesized output. Slice 3 deferred this because (a) single-user-on-Mac, (b) Claude Desktop access to /xask is "nice to have" per spec, (c) mobile is bonus, not committed. If the user starts using Claude Desktop or mobile MCP for /xask-style questions, this tool needs to ship.
+**Description:** Lift the synthesis prompt + DATA_TO_ANALYZE wrap + HARD RULES from `commands/xask.md` into a server-side MCP tool that calls Anthropic SDK directly with API key from macOS Keychain. Restores the original v1 plan's server-side surface but as Slice 3.5 instead of Slice 3.
+**Files:** would add `src/xsensai/llm/`, `src/xsensai/cache/`, extend `src/xsensai/mcp_server/server.py`.
+
+### `/xask` decision-brief output template variant
+
+**Priority:** P4 (taste decision deferred from Slice 3 CEO review)
+**Origin:** Slice 3 Codex CEO challenge (TD-CEO-1) — argued for a `claim, supporting cards, counter-card, next action, confidence` output template instead of the spec's generic synthesis. Spec is locked; output template stays. Revisit after 2 weeks of real /xask use if the generic template feels too soft.
+**Description:** Add an opt-in template variant; switch via inline `decision-brief` keyword (matching the inline override pattern). Single source of truth in `src/xsensai/synthesis/template.py`.
+**Files:** [src/xsensai/synthesis/template.py](src/xsensai/synthesis/template.py), [commands/xask.md](commands/xask.md)
 
 ---
 
