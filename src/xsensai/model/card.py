@@ -61,6 +61,12 @@ class CardFrontmatter(BaseModel):
     retrieval_tags: List[str] = Field(default_factory=list)
     extraction_pending: bool = False
 
+    # Slice 2 /review F10: 24h idempotency fingerprint for paste_bookmark.
+    # sha256 hex of the original content (NOT raw_bytes — content as the user
+    # typed it). Lets paste_bookmark detect "this exact paste already happened
+    # in the last 24h" without comparing every prior raw_bytes.
+    content_fingerprint: Optional[str] = None
+
     @field_validator("captured", "date", "next_review_at")
     @classmethod
     def require_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
