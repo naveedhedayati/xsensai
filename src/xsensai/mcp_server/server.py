@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import stat
 import sys
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -38,6 +40,9 @@ from xsensai.locks import filelock
 from xsensai.model.card import CardFrontmatter, LoadedCard
 from xsensai.retrieval import engine, format as fmt
 from xsensai.storage import corpus, inbox, slug
+from xsensai.web_fork import last30days_runner
+from xsensai.xask import log as xask_log
+from xsensai import xask as xask_pkg
 
 logging.basicConfig(
     stream=sys.stderr,
@@ -949,6 +954,74 @@ def _is_v1_card(card: LoadedCard) -> bool:
     v1 adapter at load time). Slice 2 refuses to mutate these — UC1+UC8.
     """
     return card.fm.raw_path is None and card.fm.raw_checksum is None
+
+
+@mcp.tool()
+def xask_capabilities() -> Dict[str, Any]:
+    """Read-only deploy-status helper for /xask.
+
+    Returns whether /xask is wired and which web-fork backend is available.
+    Restores the MCP `tools/list` deploy-status signal that the slice's
+    reshape (synthesis-as-host-Claude-session) would otherwise have eliminated.
+
+    Used by:
+      - CLAUDE.md deploy-status enumeration (post-merge health check)
+      - /xhelp Available-now table (data source for the live `/xask` line)
+      - manual smoke after `./scripts/dev_refresh.sh`
+
+    Returns the success envelope:
+      {
+        "ok": True,
+        "version": "1.0.0",                  # SERVICE_VERSION
+        "prompt_template_version": "1.0.0",  # PROMPT_TEMPLATE_VERSION
+        "web_fork_available": bool,          # script exists + owned-by-user + not symlink
+        "web_fork_path": str,                # resolved path
+        "log_path": str,                     # ~/.cache/xsensai/xask-log.jsonl
+        "log_mode": "off" | "hash_only" | "full",
+      }
+
+    Or the standard error envelope on failure (A2 fix):
+      {
+        "ok": False,
+        "error": {"code", "message", "next_action", "retryable", "details"},
+        "rendered_message": str,
+      }
+    """
+    try:
+        web_path = last30days_runner.resolve_path()
+        web_available = False
+        if web_path.exists() and web_path.is_file():
+            try:
+                lst = web_path.lstat()
+                web_available = (
+                    not stat.S_ISLNK(lst.st_mode) and lst.st_uid == os.getuid()
+                )
+            except OSError:
+                web_available = False
+
+        return {
+            "ok": True,
+            "version": xask_pkg.SERVICE_VERSION,
+            "prompt_template_version": xask_pkg.PROMPT_TEMPLATE_VERSION,
+            "web_fork_available": web_available,
+            "web_fork_path": str(web_path),
+            "log_path": str(xask_log.resolve_log_file()),
+            "log_mode": xask_log.resolve_mode(),
+        }
+    except XSensaiError as e:
+        return _error_response(e)
+    except Exception as e:  # noqa: BLE001 — never let xask_capabilities crash the deploy probe
+        err = XSensaiError(
+            code="INTERNAL_ERROR",
+            cause=f"xask_capabilities probe failed: {type(e).__name__}: {e}",
+            attempted="probe /xask deploy state",
+            next_action=(
+                "Check filesystem perms on $XDG_CACHE_HOME and "
+                "$XSENSAI_LAST30DAYS_PATH; re-run /xhelp after fixing."
+            ),
+            retryable=True,
+        )
+        return _error_response(err)
 
 
 def main() -> None:
