@@ -140,3 +140,54 @@ def test_keychain_provider_raises_setup_required_when_keyring_missing(monkeypatc
         p.get_refresh_token()
     assert exc.value.code == "OAUTH_SETUP_REQUIRED"
     assert "keyring" in exc.value.cause.lower()
+
+
+def test_get_stored_client_id_prefers_env_var(monkeypatch):
+    """Env var wins over Keychain (lets cron + tests override)."""
+    from xsensai.sync.auth import CLIENT_ID_ENV, get_stored_client_id
+    monkeypatch.setenv(CLIENT_ID_ENV, "from-env-123")
+    fake = MagicMock()
+    fake.get_password.return_value = "from-keychain-456"
+    _patch_keyring(monkeypatch, fake)
+    assert get_stored_client_id() == "from-env-123"
+
+
+def test_get_stored_client_id_falls_back_to_keychain(monkeypatch):
+    """When env var is unset, read from Keychain. This is the load-bearing
+    path for /xsync from a fresh Claude Code session — that process
+    doesn't inherit env vars from the terminal that ran setup_oauth.
+    """
+    from xsensai.sync.auth import CLIENT_ID_ENV, get_stored_client_id
+    monkeypatch.delenv(CLIENT_ID_ENV, raising=False)
+    fake = MagicMock()
+    fake.get_password.return_value = "from-keychain-456"
+    _patch_keyring(monkeypatch, fake)
+    assert get_stored_client_id() == "from-keychain-456"
+
+
+def test_get_stored_client_id_returns_none_when_neither_set(monkeypatch):
+    """Both sources empty → None (caller surfaces OAUTH_CLIENT_ID_MISSING)."""
+    from xsensai.sync.auth import CLIENT_ID_ENV, get_stored_client_id
+    monkeypatch.delenv(CLIENT_ID_ENV, raising=False)
+    fake = MagicMock()
+    fake.get_password.return_value = None
+    _patch_keyring(monkeypatch, fake)
+    assert get_stored_client_id() is None
+
+
+def test_store_client_id_writes_to_keychain(monkeypatch):
+    from xsensai.sync.auth import KEYCHAIN_CLIENT_ID_ACCOUNT, KEYCHAIN_SERVICE_NAME, store_client_id
+    fake = MagicMock()
+    _patch_keyring(monkeypatch, fake)
+    store_client_id("my-client-id")
+    fake.set_password.assert_called_once_with(
+        KEYCHAIN_SERVICE_NAME, KEYCHAIN_CLIENT_ID_ACCOUNT, "my-client-id"
+    )
+
+
+def test_store_client_id_rejects_empty(monkeypatch):
+    from xsensai.sync.auth import store_client_id
+    fake = MagicMock()
+    _patch_keyring(monkeypatch, fake)
+    with pytest.raises(ValueError):
+        store_client_id("")

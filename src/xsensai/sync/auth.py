@@ -30,7 +30,9 @@ from xsensai.errors import XSensaiError
 
 KEYCHAIN_SERVICE_NAME = "x-sensai"
 KEYCHAIN_ACCOUNT_NAME = "x-api-refresh-token"
+KEYCHAIN_CLIENT_ID_ACCOUNT = "x-api-client-id"
 ENV_VAR_NAME = "XSENSAI_X_REFRESH_TOKEN"
+CLIENT_ID_ENV = "XSENSAI_X_CLIENT_ID"
 
 
 @runtime_checkable
@@ -172,11 +174,65 @@ class EnvSecretTokenProvider:
         pass
 
 
+def get_stored_client_id() -> Optional[str]:
+    """Resolve the X dev app client_id from (in order):
+      1. ${XSENSAI_X_CLIENT_ID} env var
+      2. macOS Keychain at service=x-sensai, account=x-api-client-id
+
+    Returns None if neither source has a value. The CLI surfaces
+    OAUTH_CLIENT_ID_MISSING if both miss.
+
+    Why store client_id in Keychain too? It's not secret, but it IS
+    config the user only sets once via setup_oauth. Storing it next to
+    the refresh token means /xsync from a fresh Claude Code session
+    (which doesn't inherit env vars from the terminal that ran setup_oauth)
+    just works without env-var plumbing.
+    """
+    # Env var wins (cron + tests use it; explicit override).
+    env_val = os.environ.get(CLIENT_ID_ENV, "").strip()
+    if env_val:
+        return env_val
+    # Keychain fallback (set by setup_oauth on successful auth).
+    try:
+        import keyring  # type: ignore[import-untyped]
+        kc = keyring.get_password(KEYCHAIN_SERVICE_NAME, KEYCHAIN_CLIENT_ID_ACCOUNT)
+        if kc and kc.strip():
+            return kc.strip()
+    except Exception:
+        pass
+    return None
+
+
+def store_client_id(client_id: str) -> None:
+    """Persist the X dev app client_id to Keychain so future invocations
+    don't need the env var. Called by setup_oauth on successful auth."""
+    if not client_id:
+        raise ValueError("Refusing to store an empty client_id.")
+    try:
+        import keyring  # type: ignore[import-untyped]
+        keyring.set_password(KEYCHAIN_SERVICE_NAME, KEYCHAIN_CLIENT_ID_ACCOUNT, client_id)
+    except Exception as e:
+        raise XSensaiError(
+            code="OAUTH_KEYCHAIN_BLOCKED",
+            cause=f"Could not persist client_id to Keychain: {type(e).__name__}: {e}",
+            attempted=f"keyring.set_password({KEYCHAIN_SERVICE_NAME!r}, {KEYCHAIN_CLIENT_ID_ACCOUNT!r}, ...)",
+            next_action=(
+                "OAuth still succeeded; you can use /xsync by exporting "
+                f"{CLIENT_ID_ENV} in your shell instead."
+            ),
+            retryable=True,
+        )
+
+
 __all__ = [
     "TokenProvider",
     "KeychainTokenProvider",
     "EnvSecretTokenProvider",
+    "get_stored_client_id",
+    "store_client_id",
     "KEYCHAIN_SERVICE_NAME",
     "KEYCHAIN_ACCOUNT_NAME",
+    "KEYCHAIN_CLIENT_ID_ACCOUNT",
     "ENV_VAR_NAME",
+    "CLIENT_ID_ENV",
 ]

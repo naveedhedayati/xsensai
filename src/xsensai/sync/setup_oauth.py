@@ -41,8 +41,15 @@ log = logging.getLogger(__name__)
 
 
 CLIENT_ID_ENV = "XSENSAI_X_CLIENT_ID"
+PORT_ENV = "XSENSAI_OAUTH_PORT"
 DEFAULT_SCOPES = ["bookmark.read", "tweet.read", "users.read", "offline.access"]
 CALLBACK_TIMEOUT_SECONDS = 300  # 5 min — long enough for the user to grant
+# Default callback port. X's OAuth 2.0 requires the redirect URI to EXACTLY
+# match the one registered in the X dev portal — including the port. So we
+# use a fixed default (not a random ephemeral port). The user registers
+# `http://127.0.0.1:8765/callback` once in their dev portal and we use this
+# port forever after. Override with --port or XSENSAI_OAUTH_PORT if needed.
+DEFAULT_CALLBACK_PORT = 8765
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -92,19 +99,26 @@ class _CallbackHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def _bind_loopback_server() -> Tuple[HTTPServer, int]:
-    """Bind on 127.0.0.1 with an OS-assigned ephemeral port."""
+def _bind_loopback_server(port: int = DEFAULT_CALLBACK_PORT) -> Tuple[HTTPServer, int]:
+    """Bind on 127.0.0.1 at the given port (default 8765, fixed so the
+    redirect URI matches what's registered in the X dev portal).
+
+    On port-in-use, raise OAUTH_PORT_COLLISION with a clear next step
+    (kill whatever's using that port, or pass --port to override).
+    """
     try:
-        # port=0 → kernel picks an available ephemeral port
-        server = HTTPServer(("127.0.0.1", 0), _CallbackHandler)
+        server = HTTPServer(("127.0.0.1", port), _CallbackHandler)
     except OSError as e:
         raise XSensaiError(
             code="OAUTH_PORT_COLLISION",
-            cause=f"Could not bind 127.0.0.1 ephemeral port: {e}",
-            attempted="HTTPServer(('127.0.0.1', 0), ...)",
+            cause=f"Could not bind 127.0.0.1:{port}: {e}",
+            attempted=f"HTTPServer(('127.0.0.1', {port}), ...)",
             next_action=(
-                "Likely all ephemeral ports are exhausted (rare). Wait a moment "
-                "and retry, or restart your shell."
+                f"Port {port} is in use. Either close the program holding it "
+                f"(e.g., `lsof -i :{port}`), or pass --port <number> to use a "
+                f"different port (and update the callback URL in your X dev "
+                f"portal to match — see X dev portal → your app → User "
+                f"authentication settings → Callback URI)."
             ),
             retryable=True,
         )
@@ -192,6 +206,9 @@ def main(argv: Optional[list] = None) -> int:
                         help="Print the auth URL instead of auto-opening the browser")
     parser.add_argument("--client-id", default=None,
                         help=f"X dev app client_id (overrides ${CLIENT_ID_ENV})")
+    parser.add_argument("--port", type=int, default=None,
+                        help=f"Callback port (overrides ${PORT_ENV}; default {DEFAULT_CALLBACK_PORT}). "
+                        f"MUST match what's registered in your X dev portal.")
     args = parser.parse_args(argv)
 
     client_id = args.client_id or os.environ.get(CLIENT_ID_ENV, "").strip() or None
@@ -230,9 +247,24 @@ def main(argv: Optional[list] = None) -> int:
         print(err.format(), file=sys.stderr)
         return 2
 
-    # Bind loopback callback server
+    # Bind loopback callback server. Port resolution order:
+    # 1. --port flag
+    # 2. XSENSAI_OAUTH_PORT env var
+    # 3. DEFAULT_CALLBACK_PORT (8765)
+    port_to_use = args.port
+    if port_to_use is None:
+        env_port = os.environ.get(PORT_ENV, "").strip()
+        if env_port:
+            try:
+                port_to_use = int(env_port)
+            except ValueError:
+                print(f"warning: ${PORT_ENV}={env_port!r} is not a valid integer; using {DEFAULT_CALLBACK_PORT}", file=sys.stderr)
+                port_to_use = DEFAULT_CALLBACK_PORT
+    if port_to_use is None:
+        port_to_use = DEFAULT_CALLBACK_PORT
+
     try:
-        server, port = _bind_loopback_server()
+        server, port = _bind_loopback_server(port_to_use)
     except XSensaiError as e:
         print(e.format(), file=sys.stderr)
         return 3
@@ -361,11 +393,22 @@ def main(argv: Optional[list] = None) -> int:
         print(e.format(), file=sys.stderr)
         return 5
 
+    # Also persist the client_id in Keychain so /xsync from Claude Code
+    # (which doesn't inherit shell env vars) can find it without the
+    # user having to add an `export` to their shell rc.
+    try:
+        from xsensai.sync.auth import store_client_id
+        store_client_id(client_id)
+    except XSensaiError as e:
+        # Non-fatal — OAuth succeeded; user can fall back to env var.
+        print(e.format(), file=sys.stderr)
+
     print()
     print("✅ x-sensai OAuth setup complete.")
-    print(f"   Refresh token stored in Keychain ({KEYCHAIN_SERVICE_NAME}/{KEYCHAIN_ACCOUNT_NAME}).")
+    print(f"   Refresh token + client_id stored in Keychain ({KEYCHAIN_SERVICE_NAME}/*).")
     print()
     print("Next: run /xsync in Claude Code to fetch your bookmarks.")
+    print("(No shell env vars needed — everything's in Keychain.)")
     return 0
 
 

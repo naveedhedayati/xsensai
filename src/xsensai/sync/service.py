@@ -837,19 +837,22 @@ def _cli_emit_json(result: Any) -> None:
 
 
 def _cli_run(args: Any) -> int:
-    import os
-    from xsensai.sync.heartbeat import read_status
+    from xsensai.sync.auth import get_stored_client_id
 
-    client_id = args.client_id or os.environ.get("XSENSAI_X_CLIENT_ID", "").strip() or None
+    # Resolution order: --client-id flag > XSENSAI_X_CLIENT_ID env > Keychain.
+    # The Keychain fallback is what makes /xsync "just work" from a fresh
+    # Claude Code session — that process doesn't inherit env vars from the
+    # terminal where you ran setup_oauth.
+    client_id = args.client_id or get_stored_client_id()
     if not client_id:
         err = XSensaiError(
             code="OAUTH_CLIENT_ID_MISSING",
             cause="X dev app client_id is required.",
             attempted="sync.service run",
             next_action=(
-                "Set XSENSAI_X_CLIENT_ID env var, or pass --client-id. "
-                "If you don't have one yet, register an X dev app at developer.x.com "
-                "and run `python -m xsensai.sync.setup_oauth` to authorize."
+                "Run `python -m xsensai.sync.setup_oauth` (it stores the "
+                "client_id in macOS Keychain). Or pass --client-id explicitly. "
+                "Or export XSENSAI_X_CLIENT_ID in your environment."
             ),
             retryable=True,
         )
