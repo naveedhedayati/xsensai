@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 8 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 2 — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin` (12 new MCP tools). See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 3 — `/xask` thinking session (corpus + last30days web fork + grounded synthesis in the host Claude Code session). See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -18,14 +18,17 @@ src/xsensai/         Python package (importable as `xsensai`)
   cli/               Console scripts (xsensai-eval-history)
   locks/             Concurrency (Slice 2)
   sync/              XDK + sync (Slice 4)
-  commands/          (Reserved for Slice 3+ command handlers)
+  xask/              /xask orchestration (Slice 3): service.py + log.py + version.py
+  synthesis/         Output template + validator + injection-fixture helpers (Slice 3)
+  web_fork/          last30days subprocess wrapper, env-scrubbed (Slice 3)
 
-commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md)
+commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (77 tests: 75 always-on + 2 integration-gated)
+tests/               pytest suite (361 tests; ~9 files gated on XSENSAI_RUN_INTEGRATION=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
+  fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)
   fixtures/qmd_query_output.json   QMD JSON-output schema contract fixture
   eval/golden_set.py F1 quality gate (15 queries, target top-3 ≥ 80%)
 
@@ -51,7 +54,7 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 #   From Claude Code:       /xfind
 ```
 
-## What works (Slice 1 + Slice 2)
+## What works (Slice 1 + Slice 2 + Slice 3)
 
 | Surface | Where | What |
 |---|---|---|
@@ -60,11 +63,13 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 | `/xpaste` | Claude Code slash command | Conversational paste: drop a tweet/thread, save as a card with abort recovery (Slice 2) |
 | `/xnote` | Claude Code slash command | Annotate an existing card with `## Notes` block (Slice 2) |
 | `/xpin` | Claude Code slash command | Pin / unpin / list pinned cards; due-for-review surfacing (Slice 2) |
+| `/xask` | Claude Code slash command | Thinking session: corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs (Slice 3) |
 | `search_bookmarks` | MCP tool (any Claude conversation) | Structured response: `{hits, meta, rendered_markdown}` |
 | `get_bookmark` | MCP tool | Full card detail by id (returned by search_bookmarks) |
 | `paste_bookmark` / `recover_aborted_paste` | MCP tools | Powers `/xpaste` (Slice 2) |
 | `annotate_card` | MCP tool | Powers `/xnote` (Slice 2) |
 | `set_pin` / `list_pinned` / `due_cards_for_review` | MCP tools | Powers `/xpin` (Slice 2) |
+| `xask_capabilities` | MCP tool | Read-only deploy-status helper for `/xask` (Slice 3) |
 | `ping` | MCP tool | Smoke test (Slice 0) |
 
 ## Quality gate (F1)
@@ -83,7 +88,7 @@ This validates the autoplan D1 decision — QMD's BM25 ranking is sufficient for
 - **Slice 0** (shipped): spikes + skeleton + `ping` smoke test + `errors.py`.
 - **Slice 1** (shipped): card model + sidecar storage + v1 read adapter + retrieval (QMD wrapper, scoring, [B]/[P] format) + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp`.
 - **Slice 2** (shipped): locks (`fcntl.flock` + UUID fencing) + atomic sidecar write (`durable_replace` with macOS `F_FULLFSYNC`) + `/xpaste` + `/xnote` + `/xpin` + read-side reindex trigger so paste→find round-trips in one session.
-- **Slice 3** (current): `/xask` + last30days web fork + synthesis + LLM re-rank.
+- **Slice 3** (shipped, v0.4.0.0): `/xask` + last30days web fork + grounded synthesis in the host Claude Code session (no server-side LLM dep).
 - **Slice 4**: XDK sync + `/xsync` + checkpoint resume.
 - **Slice 5**: GitHub Actions cron.
 - **Slice 6**: v1→v2 migration script + setup wizard. (v1 read adapter from Slice 1 deleted at this point.)
@@ -95,7 +100,7 @@ See [TROUBLESHOOTING.md](./TROUBLESHOOTING.md), keyed by error code.
 ## Tests
 
 ```bash
-.venv/bin/pytest                                      # unit tests (75 fast)
-XSENSAI_RUN_INTEGRATION=1 .venv/bin/pytest            # + 7 integration tests (need QMD)
+.venv/bin/pytest                                      # unit tests (always-on)
+XSENSAI_RUN_INTEGRATION=1 .venv/bin/pytest            # + integration tests (need QMD + last30days)
 xsensai-eval-history                                  # quality-gate trend over time
 ```

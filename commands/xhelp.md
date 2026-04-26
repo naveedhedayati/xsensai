@@ -23,12 +23,12 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `/xpaste` | Save pasted content as a paste card. First prompt accepts `recover` to restore an aborted paste from the inbox. |
 | `/xnote` | Annotate a card (single mode) or walk pending cards (`review` mode). V1 cards refused until Slice 6 migration. |
 | `/xpin` | Pin / unpin / list pinned cards. V1 cards refused until Slice 6 migration. |
+| `/xask` | Thinking session — live: corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs (synthesis runs in your Claude Code session). |
 
 ### Planned
 
 | Command | Slice | What it will do |
 |---|---|---|
-| `/xask` | Slice 3 | Full thinking session: corpus + web fusion + synthesis |
 | `/xsync` | Slice 4 | Ingest new bookmarks from X |
 | `/xtranscribe` | Slice 4 | Process queued video transcriptions |
 
@@ -53,18 +53,31 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `due_cards_for_review(limit?)` | List cards needing /xnote review (read-only). Returns `{count, total, has_more, cursor, due}`. Skips past `_review-cursor.json` (UC10). |
 | `get_review_cursor()` | Read the /xnote review walk cursor (UC10). |
 | `set_review_cursor(last_card_id?)` | Update or clear the /xnote review walk cursor (UC10). |
+| `xask_capabilities()` | Read-only deploy-status helper for `/xask`: `{ok, version, prompt_template_version, web_fork_available, web_fork_path, log_path, log_mode}` (Slice 3). |
 
 ### Planned
 
 | Tool | Slice | What it will do |
 |---|---|---|
-| `ask_bookmarks(question, ...)` | Slice 3 | Corpus-only synthesis with cited references |
+| (none currently planned for the next slice) | — | — |
 
 ## Inline `/xfind` overrides
 
 Append to your query:
 - `no decay` — disable recency weighting
 - `skip pins` — exclude pinned cards from results
+
+## Inline `/xask` overrides
+
+Append to your question:
+- `no decay` — disable recency weighting on retrieval
+- `skip pins` — exclude pinned cards from retrieval
+- `no web` — skip the `last30days` web fork entirely
+- `challenge` — run an extra retrieval pass that hunts for a dissenting card
+
+Override fuzzy match: if you say `dissent`, `recency`, `web off`, etc., `/xask`
+will detect the canonical phrase, apply the override, AND prepend a one-line
+note to your output telling you the canonical token to use next time.
 
 ## /xpaste → /xfind round-trip
 
