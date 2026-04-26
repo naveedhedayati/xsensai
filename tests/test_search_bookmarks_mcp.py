@@ -88,6 +88,41 @@ def test_search_bookmarks_registered() -> None:
             proc.wait()
 
 
+def test_all_slice_2_tools_registered() -> None:
+    """tools/list MUST include all Slice 2 write tools — per /review F7
+    (API contract specialist) + UC9/UC10/UC11 wire-ups."""
+    expected = {
+        # Slice 0 + 1
+        "ping", "search_bookmarks", "get_bookmark",
+        # Slice 2 core
+        "paste_bookmark", "annotate_card",
+        "set_pin", "list_pinned", "due_cards_for_review",
+        # Slice 2 wire-ups (UC9/UC10/UC11) + F22 split
+        "recover_aborted_paste",  # deprecated, back-compat
+        "list_recoverable_pastes", "get_aborted_paste",  # F22 split
+        "write_paste_snapshot", "clear_paste_snapshot",  # UC11 + UC9
+        "get_review_cursor", "set_review_cursor",  # UC10
+    }
+    proc = _spawn()
+    try:
+        _initialize(proc)
+        _send(proc, {"jsonrpc": "2.0", "id": 99, "method": "tools/list"})
+        resp = _recv(proc)
+        names = {t["name"] for t in resp["result"]["tools"]}
+        missing = expected - names
+        assert not missing, f"Slice 2 tools missing from tools/list: {missing}"
+        # Each tool MUST have a non-empty inputSchema (FastMCP generates from sig)
+        for tool in resp["result"]["tools"]:
+            assert tool.get("inputSchema"), f"tool {tool['name']!r} has no inputSchema"
+    finally:
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+
 def test_search_bookmarks_corpus_unavailable() -> None:
     """If the corpus path doesn't exist, search returns CORPUS_UNAVAILABLE."""
     proc = _spawn(env_extra={"XSENSAI_CORPUS_PATH": "/nonexistent/path/foo"})
