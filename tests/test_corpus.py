@@ -27,6 +27,58 @@ def test_iter_cards_skips_underscore_prefixed_files(tmp_path: Path) -> None:
     assert cards == []
 
 
+def test_iter_cards_skips_vault_navigation_files_silently(
+    tmp_path: Path, caplog
+) -> None:
+    """The user's vault may legitimately contain CLAUDE.md (Claude context for
+    the bookmarks area when operating directly in the vault) and README.md
+    (human-facing readme). Neither is a card. The walker MUST skip them
+    silently — without this, every retrieval logs a WARNING for both.
+    """
+    (tmp_path / "CLAUDE.md").write_text(
+        "# X-Bookmarks\n\nVault navigation file, not a card.\n"
+    )
+    (tmp_path / "README.md").write_text("# Bookmarks vault README\n")
+    with caplog.at_level(logging.WARNING, logger="xsensai.storage.corpus"):
+        cards = list(corpus.iter_cards(corpus_path=tmp_path))
+    assert cards == []
+    # Critical: silent skip. No warnings for navigation files.
+    assert not any("CLAUDE.md" in r.message for r in caplog.records)
+    assert not any("README.md" in r.message for r in caplog.records)
+
+
+def test_iter_cards_skips_non_frontmatter_md_silently(
+    tmp_path: Path, caplog
+) -> None:
+    """Any .md without a YAML frontmatter opener (`---`) is not a card. The
+    walker silently skips. Without this, dropping a topic-index.md or design
+    note in the corpus dir would WARN on every retrieval.
+    """
+    (tmp_path / "topic-notes.md").write_text(
+        "# My personal notes\n\nNo frontmatter, just markdown.\n"
+    )
+    with caplog.at_level(logging.WARNING, logger="xsensai.storage.corpus"):
+        cards = list(corpus.iter_cards(corpus_path=tmp_path))
+    assert cards == []
+    assert not any("topic-notes.md" in r.message for r in caplog.records)
+
+
+def test_iter_cards_metadata_also_skips_navigation_files(
+    tmp_path: Path, caplog
+) -> None:
+    """iter_cards_metadata (used by /xpin list, due_cards_for_review) shares
+    the walker. Same skip rules must apply, otherwise pin-listing would
+    spam warnings on every invocation.
+    """
+    (tmp_path / "CLAUDE.md").write_text("# Vault navigation\n")
+    (tmp_path / "topic.md").write_text("# Free-form note, no frontmatter\n")
+    with caplog.at_level(logging.WARNING, logger="xsensai.storage.corpus"):
+        cards = list(corpus.iter_cards_metadata(corpus_path=tmp_path))
+    assert cards == []
+    assert not any("CLAUDE.md" in r.message for r in caplog.records)
+    assert not any("topic.md" in r.message for r in caplog.records)
+
+
 def test_iter_cards_skips_malformed_with_warning(tmp_path: Path, caplog) -> None:
     bad = tmp_path / "broken.md"
     bad.write_text("---\nnot: valid: yaml:\n---\n")

@@ -66,6 +66,48 @@ _RAW_PATH_CHECKSUM_PREFIX_LEN = 12
 # disks; <10s even on iCloud-synced volumes).
 ORPHAN_TMP_AGE_THRESHOLD_SEC = 300
 
+# Vault navigation files that may legitimately live in the corpus directory
+# but are NOT cards. The user's vault uses CLAUDE.md to give Claude context
+# about the bookmarks area when operating there directly; README.md is the
+# conventional human-facing readme. The walker silently skips both. Underscore-
+# prefixed files (_sync-status.md, _v1-upgraded.jsonl, etc.) are already
+# excluded by the prefix rule.
+_NON_CARD_FILENAMES = frozenset({"CLAUDE.md", "README.md"})
+
+
+def _is_card_shaped(md_path: Path) -> bool:
+    """Cheap structural check: does this .md file have a YAML frontmatter
+    block at all? A card always opens with `---\\n`. Files that don't are
+    arbitrary markdown (vault notes, design docs, READMEs) and are silently
+    skipped — without this, every retrieval logs a WARNING for every non-card
+    .md in the corpus directory.
+
+    Reads only the first 4 bytes. Treats any read error as "not card-shaped"
+    (the strict load_card path would have surfaced a real error anyway).
+    """
+    try:
+        with md_path.open("rb") as f:
+            head = f.read(4)
+    except OSError:
+        return False
+    return head.startswith(b"---\n") or head.startswith(b"---\r")
+
+
+def _walk_card_files(corpus: Path) -> List[Path]:
+    """Enumerate .md files in the corpus that look like cards.
+
+    Filters out: underscore-prefixed metadata files (_sync-status.md, etc.),
+    named navigation files (CLAUDE.md, README.md), and any .md without a
+    YAML frontmatter opener. Returned list is sorted for deterministic
+    iteration order across iter_cards and iter_cards_metadata.
+    """
+    return sorted(
+        p for p in corpus.glob("*.md")
+        if not p.name.startswith("_")
+        and p.name not in _NON_CARD_FILENAMES
+        and _is_card_shaped(p)
+    )
+
 
 def get_corpus_path() -> Path:
     """Resolve the corpus path from $XSENSAI_CORPUS_PATH or default."""
@@ -290,7 +332,7 @@ def iter_cards(corpus_path: Optional[Path] = None) -> Iterator[LoadedCard]:
 
     seen_source_ids: set[str] = set()
 
-    md_files = sorted(p for p in corpus.glob("*.md") if not p.name.startswith("_"))
+    md_files = _walk_card_files(corpus)
     for md_path in md_files:
         try:
             card = load_card(md_path, corpus_root=corpus)
@@ -325,7 +367,7 @@ def iter_cards_metadata(corpus_path: Optional[Path] = None) -> Iterator[LoadedCa
     sidecar read + sha256 verify is skipped.
     """
     corpus = resolve_corpus_path(corpus_path)
-    md_files = sorted(p for p in corpus.glob("*.md") if not p.name.startswith("_"))
+    md_files = _walk_card_files(corpus)
     for md_path in md_files:
         try:
             post = frontmatter.load(md_path)
