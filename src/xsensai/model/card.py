@@ -88,7 +88,15 @@ class CardFrontmatter(BaseModel):
     lazy_extract_in_progress: bool = False
     lazy_extract_claim_at: Optional[datetime] = None
 
-    @field_validator("captured", "date", "next_review_at")
+    # Slice 6 — tombstone schema. Soft-delete a card without removing the
+    # file from disk. Tombstoned cards are excluded from retrieval, lists,
+    # and dedup; cron skips replay-write of deleted cards (sticky deletion
+    # per /autoplan premise-gate decision). Restore via restore_bookmark
+    # MCP tool / /xrestore slash command.
+    deleted: bool = False
+    deleted_at: Optional[datetime] = None
+
+    @field_validator("captured", "date", "next_review_at", "deleted_at", "lazy_extract_claim_at")
     @classmethod
     def require_utc(cls, v: Optional[datetime]) -> Optional[datetime]:
         if v is None:
@@ -141,6 +149,17 @@ class CardFrontmatter(BaseModel):
                 raise ValueError(
                     f"paste cards must have author='self' or no author, got {self.author!r}"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def check_tombstone_invariants(self) -> "CardFrontmatter":
+        # Slice 6 — deleted/deleted_at must be consistent. Either both set
+        # or both unset. Caught early via Pydantic so partial mutations
+        # or hand-edits cannot leave inconsistent state on disk.
+        if self.deleted and self.deleted_at is None:
+            raise ValueError("deleted=True requires deleted_at to be set")
+        if not self.deleted and self.deleted_at is not None:
+            raise ValueError("deleted_at must be None when deleted=False")
         return self
 
 

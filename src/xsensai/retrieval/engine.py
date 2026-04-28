@@ -75,6 +75,13 @@ async def search(
         except XSensaiError as e:
             log.warning("skipping QMD hit %s: [%s] %s", path.name, e.code, e.cause)
             continue
+        # Slice 6 — tombstone filter. QMD indexes the on-disk corpus and
+        # may surface deleted cards as candidates; iter_cards' default
+        # filter doesn't apply because retrieval calls load_card directly.
+        # CANDIDATE_LIMIT (200) overfetches enough to keep top_k stable on
+        # tombstone-heavy corpora.
+        if card.fm.deleted:
+            continue
         if not include_pinned and card.fm.pinned:
             continue
         recency = scoring.recency_weight(

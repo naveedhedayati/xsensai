@@ -286,7 +286,10 @@ def load_card(md_path: Path, corpus_root: Optional[Path] = None) -> LoadedCard:
     return LoadedCard(fm=cf, body=body, raw_bytes=raw_bytes, md_path=md_path)
 
 
-def iter_cards(corpus_path: Optional[Path] = None) -> Iterator[LoadedCard]:
+def iter_cards(
+    corpus_path: Optional[Path] = None,
+    include_deleted: bool = False,
+) -> Iterator[LoadedCard]:
     """Iterate every card in the corpus directory (excluding _* metadata files).
 
     Skips malformed cards with a stderr WARNING and continues. Defends
@@ -294,6 +297,11 @@ def iter_cards(corpus_path: Optional[Path] = None) -> Iterator[LoadedCard]:
 
     On entry: discovers and discards orphan .tmp files left from crashed
     writes (Slice 2 self-healing per spec).
+
+    Slice 6: tombstoned cards (frontmatter `deleted: true`) are excluded by
+    default. Pass include_deleted=True to see them — used internally by
+    sync dedup and the restore_bookmark path. The default-False contract
+    means every existing call site (retrieval, list ops) inherits exclusion.
 
     Raises XSensaiError(CORPUS_UNAVAILABLE) if the corpus path is missing or invalid.
     """
@@ -347,10 +355,17 @@ def iter_cards(corpus_path: Optional[Path] = None) -> Iterator[LoadedCard]:
                 )
                 continue
             seen_source_ids.add(sid)
+        # Slice 6 — tombstone filter. v1 cards (no deleted field) get
+        # default False from Pydantic so this is safe.
+        if not include_deleted and card.fm.deleted:
+            continue
         yield card
 
 
-def iter_cards_metadata(corpus_path: Optional[Path] = None) -> Iterator[LoadedCard]:
+def iter_cards_metadata(
+    corpus_path: Optional[Path] = None,
+    include_deleted: bool = False,
+) -> Iterator[LoadedCard]:
     """Like iter_cards but SKIPS sidecar reads + checksum verification.
 
     Per /review F4 (Performance specialist): list_pinned and due_cards_for_review
@@ -386,6 +401,10 @@ def iter_cards_metadata(corpus_path: Optional[Path] = None) -> Iterator[LoadedCa
             cf = CardFrontmatter.model_validate(fm_dict)
         except Exception as e:
             log.warning("skipping %s: validation error: %s", md_path.name, e)
+            continue
+        # Slice 6 — tombstone filter. Default-False parameter; sync dedup
+        # paths pass include_deleted=True to see them.
+        if not include_deleted and cf.deleted:
             continue
         # Construct LoadedCard with EMPTY raw_bytes — caller is responsible
         # for not relying on the sidecar via this fast path.
@@ -587,10 +606,15 @@ def find_recent_paste_by_fingerprint(
 
     Uses iter_cards_metadata (skips sidecar verify) since we only need the
     captured + fingerprint frontmatter fields.
+
+    Slice 6: passes include_deleted=True so paste-fingerprint dedup sees
+    tombstones. A user pasting the same content within 24h of deleting the
+    prior version should still hit dedup (avoids accidentally creating a
+    duplicate paste they meant to delete).
     """
     now = datetime.now(timezone.utc)
     cutoff = now.timestamp() - window_seconds
-    for card in iter_cards_metadata(corpus_path):
+    for card in iter_cards_metadata(corpus_path, include_deleted=True):
         if card.fm.source_type != "paste":
             continue
         if card.fm.captured.timestamp() < cutoff:
@@ -643,13 +667,21 @@ def log_v1_mutation_blocked(
         log.warning("could not append to %s: %s", log_path, e)
 
 
-def load_card_by_id(card_id: str, corpus_path: Optional[Path] = None) -> LoadedCard:
+def load_card_by_id(
+    card_id: str,
+    corpus_path: Optional[Path] = None,
+    include_deleted: bool = False,
+) -> LoadedCard:
     """Look up a card by its id (filename without .md). Raises NO_RESULTS if missing.
 
     Per Slice 2 security guard: the id is validated against a strict regex
     before path construction, AND the resolved path is confirmed inside the
     corpus root. This blocks the path-traversal class (e.g., id="../../etc/passwd")
     that Slice 1 originally allowed.
+
+    Slice 6: tombstoned cards raise NO_RESULTS by default (consistent with
+    "card is gone" UX). Pass include_deleted=True to see deleted cards —
+    used by delete_bookmark/restore_bookmark and sync dedup.
     """
     validate_card_id(card_id)
     corpus = resolve_corpus_path(corpus_path)
@@ -662,7 +694,16 @@ def load_card_by_id(card_id: str, corpus_path: Optional[Path] = None) -> LoadedC
             next_action="Check the id (filename without .md) returned by search_bookmarks.",
             retryable=False,
         )
-    return load_card(md_path, corpus_root=corpus)
+    card = load_card(md_path, corpus_root=corpus)
+    if not include_deleted and card.fm.deleted:
+        raise XSensaiError(
+            code="NO_RESULTS",
+            cause=f"Card {card_id!r} is deleted",
+            attempted=f"load_card_by_id({card_id!r})",
+            next_action="Restore via /xrestore if you want this card back, or pass include_deleted=True if you need to inspect tombstone state.",
+            retryable=False,
+        )
+    return card
 
 
 __all__ = [

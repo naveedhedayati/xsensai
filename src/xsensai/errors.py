@@ -79,6 +79,12 @@ ErrorCode = Literal[
     "CRON_CONFLICT_UNRESOLVED",
     "SYNC_PUSH_REJECTED",
     "SYNC_AUTH_FAILED",
+    # Slice 6 — tombstone + setup wizard
+    "TOMBSTONE_BLOCKED",
+    "NO_ROLLBACK_JOURNAL",
+    "SETUP_GH_AUTH_REQUIRED",
+    "SETUP_DEPLOY_KEY_REJECTED",
+    "SETUP_FIRST_RUN_FAILED",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
