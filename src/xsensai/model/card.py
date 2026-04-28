@@ -82,6 +82,12 @@ class CardFrontmatter(BaseModel):
     # group cards by sync run. Underscored to indicate internal/non-user.
     xsync_run_id: Optional[str] = Field(default=None, alias="_xsync_run_id")
 
+    # Slice 5 — lazy-extract claim flag. Set when /xfind triggers host
+    # extraction on a pending card; second concurrent /xfind sees the flag
+    # and skips. Cleared on extraction completion or 60s timeout.
+    lazy_extract_in_progress: bool = False
+    lazy_extract_claim_at: Optional[datetime] = None
+
     @field_validator("captured", "date", "next_review_at")
     @classmethod
     def require_utc(cls, v: Optional[datetime]) -> Optional[datetime]:

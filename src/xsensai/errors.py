@@ -74,6 +74,11 @@ ErrorCode = Literal[
     "SYNC_LOCK_HELD",
     "CORPUS_UNREACHABLE",
     "INVALID_FLAGS",
+    # Slice 5 — cron-specific failure modes (distinct from manual /xsync surfaces)
+    "COST_LIMIT_REACHED",
+    "CRON_CONFLICT_UNRESOLVED",
+    "SYNC_PUSH_REJECTED",
+    "SYNC_AUTH_FAILED",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
@@ -105,6 +110,12 @@ InfoCode = Literal[
     "THREADS_PERMANENTLY_UNFETCHED",
     "NO_PENDING_EXTRACTIONS",
     "EXTRACT_DONE",
+    # Slice 5 — cron status envelopes
+    "CRON_RECOVERED_FROM_CONFLICT",
+    "CRON_NO_NEW_BOOKMARKS",
+    "CRON_PARTIAL_DUE_TO_COST",
+    "EXTRACTION_BACKLOG_GROWING",
+    "LAZY_EXTRACT_TRIGGERED",
 ]
 
 _VALID_CODES = frozenset(get_args(ErrorCode))
