@@ -84,10 +84,12 @@ def test_troubleshooting_covers_slice_5_codes(docs):
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 
-def test_readme_current_slice_is_5(docs):
+def test_readme_current_slice_is_6(docs):
     """README's 'Current slice' line must reference the active slice.
 
-    Updated for Slice 5 (v0.6.0.0): scheduled cron + lazy-extract on read.
+    Updated for Slice 6 (v0.7.0.0): v1→v2 migration with byte-exact
+    rollback + tombstone schema + shadow-mode union merge driver +
+    guided setup wizard.
     """
     readme = docs["README.md"]
     current_line = None
@@ -96,7 +98,25 @@ def test_readme_current_slice_is_5(docs):
             current_line = line
             break
     assert current_line is not None, "README missing **Current slice:** line"
-    assert "Slice 5" in current_line, f"README current slice not Slice 5: {current_line}"
+    assert "Slice 6" in current_line, f"README current slice not Slice 6: {current_line}"
+
+
+def test_changelog_has_v0_7_0_0_entry(docs):
+    """CHANGELOG must have a v0.7.0.0 entry for Slice 6."""
+    assert "[0.7.0.0]" in docs["CHANGELOG.md"]
+
+
+def test_troubleshooting_covers_slice_6_codes(docs):
+    """All Slice 6 error codes must be documented in TROUBLESHOOTING."""
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in [
+        "TOMBSTONE_BLOCKED",
+        "NO_ROLLBACK_JOURNAL",
+        "SETUP_GH_AUTH_REQUIRED",
+        "SETUP_DEPLOY_KEY_REJECTED",
+        "SETUP_FIRST_RUN_FAILED",
+    ]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 
 def test_inline_overrides_documented_in_xhelp(docs):
