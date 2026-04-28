@@ -330,6 +330,166 @@ def resolve_card_conflict_failloud(
     return results
 
 
+# ----------------------------------------------------------------------------
+# Slice 6 — Shadow union resolver. 2-way only. Logs candidate to
+# _conflicts.md but does NOT change the actual rebase outcome (fail-loud
+# stays primary). Promotion to primary happens in a future slice after
+# real-world conflicts confirm zero manual overrides on the union output.
+# ----------------------------------------------------------------------------
+
+
+def compute_union_candidate(
+    local_bytes: bytes,
+    remote_bytes: bytes,
+    base_bytes: Optional[bytes],
+) -> Tuple[bytes, dict]:
+    """Compute the spec-literal union merge candidate.
+
+    Spec line 213-214 rules (no per-key cleverness — see /autoplan eng-review):
+      - Frontmatter: union of all keys. On collision, prefer LOCAL.
+      - Lists (tags, applicability, media.external_urls): union with
+        order preservation.
+      - Body: prefer LOCAL in full.
+
+    Returns (merged_bytes, diff_summary) where diff_summary describes
+    which fields would have been merged vs dropped. Used by the shadow
+    log; never written to the working tree in Slice 6.
+    """
+    import frontmatter as _fm  # local import to avoid hard dep at module level
+
+    try:
+        local_post = _fm.loads(local_bytes.decode("utf-8"))
+        remote_post = _fm.loads(remote_bytes.decode("utf-8"))
+    except Exception as e:
+        return local_bytes, {"error": f"parse_failed: {e}"}
+
+    local_meta = dict(local_post.metadata)
+    remote_meta = dict(remote_post.metadata)
+
+    merged_meta: dict = dict(remote_meta)  # start with remote
+    merged_meta.update(local_meta)  # local wins on collision
+
+    would_have_merged: List[str] = []
+    would_have_dropped: List[str] = []
+
+    # List union with order preservation for known list-shape fields.
+    list_fields = {"tags", "applicability"}
+    for key in list_fields:
+        l_val = local_meta.get(key)
+        r_val = remote_meta.get(key)
+        if isinstance(l_val, list) and isinstance(r_val, list):
+            seen = set()
+            unioned = []
+            for item in (l_val + r_val):
+                if item not in seen:
+                    seen.add(item)
+                    unioned.append(item)
+            merged_meta[key] = unioned
+            if r_val and any(item not in l_val for item in r_val):
+                would_have_merged.append(key)
+
+    # media.external_urls (nested)
+    l_media = local_meta.get("media") or {}
+    r_media = remote_meta.get("media") or {}
+    if isinstance(l_media, dict) and isinstance(r_media, dict):
+        l_urls = l_media.get("external_urls") or []
+        r_urls = r_media.get("external_urls") or []
+        if isinstance(l_urls, list) and isinstance(r_urls, list):
+            seen = set()
+            unioned = []
+            for u in (l_urls + r_urls):
+                if u not in seen:
+                    seen.add(u)
+                    unioned.append(u)
+            merged_media = dict(l_media)
+            merged_media["external_urls"] = unioned
+            merged_meta["media"] = merged_media
+            if r_urls and any(u not in l_urls for u in r_urls):
+                would_have_merged.append("media.external_urls")
+
+    # Track simple key adds (remote-only fields)
+    for key in remote_meta:
+        if key not in local_meta and key not in {"tags", "applicability", "media"}:
+            would_have_merged.append(key)
+
+    # Track local-prefer drops for diagnostic
+    for key in local_meta:
+        if key in remote_meta and local_meta[key] != remote_meta[key] and key not in {"tags", "applicability", "media"}:
+            would_have_dropped.append(f"{key}:remote")
+
+    # Reconstruct merged content with local body
+    out_post = _fm.Post(content=local_post.content, **{})
+    out_post.metadata = merged_meta
+    merged_bytes = _fm.dumps(out_post).encode("utf-8")
+
+    diff_summary = {
+        "would_have_merged": would_have_merged,
+        "would_have_dropped": would_have_dropped,
+        "byte_size_local": len(local_bytes),
+        "byte_size_remote": len(remote_bytes),
+        "byte_size_union": len(merged_bytes),
+    }
+    return merged_bytes, diff_summary
+
+
+def append_shadow_union_log(
+    corpus_path: Path,
+    *,
+    run_id: str,
+    card_path: str,
+    diff_summary: dict,
+    ts: Optional[datetime] = None,
+) -> bool:
+    """Append a shadow union log entry to `_conflicts.md`.
+
+    Idempotent (per /autoplan eng-review): if `_conflicts.md` already
+    contains an entry for this `(run_id, card_path)`, skip. Prevents
+    the 3x retry-loop duplication concern.
+
+    Returns True if appended, False if skipped (duplicate or write
+    failure).
+    """
+    import json as _json
+    from json import JSONDecodeError as _JSONDecodeError  # noqa: F401
+    log_path = corpus_path / CONFLICTS_LOG
+    if ts is None:
+        ts = datetime.now(timezone.utc)
+    if log_path.exists():
+        try:
+            existing = log_path.read_text(encoding="utf-8")
+            # Idempotency check: parse each line as JSON and compare the
+            # actual `run_id` + `card` fields. Substring-needle matching
+            # breaks for paths containing `"` or `\` (JSON escaping changes
+            # the stored representation; needle wouldn't match and retries
+            # would double-log).
+            for line in existing.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                except (_json.JSONDecodeError, ValueError):
+                    continue
+                if entry.get("run_id") == run_id and entry.get("card") == card_path:
+                    return False
+        except OSError:
+            pass
+    entry = {
+        "run_id": run_id,
+        "ts": ts.isoformat(),
+        "card": card_path,
+        "shadow_resolution": "union",
+        **diff_summary,
+    }
+    try:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+        return True
+    except OSError as e:
+        log.warning("shadow log append failed: %s", e)
+        return False
+
+
 __all__ = [
     "ConflictKind",
     "ConflictResolution",
@@ -339,4 +499,6 @@ __all__ = [
     "parse_porcelain_v2_conflicts",
     "resolve_heartbeat_fast_path",
     "resolve_card_conflict_failloud",
+    "compute_union_candidate",
+    "append_shadow_union_log",
 ]
