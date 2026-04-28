@@ -2,6 +2,111 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.7.0.0] - 2026-04-28
+
+Slice 6 — v1→v2 migration with byte-exact rollback, tombstone schema,
+shadow-mode union-frontmatter merge driver, and guided setup wizard.
+Single PR. Plan + dual-voice review at
+`~/.claude/plans/immutable-waddling-quokka.md` (full /autoplan report
+appended). Both Codex and the Claude subagent independently flagged
+adapter-deletion-in-same-PR + monolithic-union-replacing-fail-loud +
+stale "Slice 7" string in TOMBSTONE_BLOCKED + onboarding regression
+risk. All four addressed via premise-gate revisions and mechanical
+fixes auto-applied to the plan before code landed.
+
+### Added
+
+- **Tombstone schema** on `CardFrontmatter`: `deleted: bool = False`
+  + `deleted_at: Optional[datetime] = None` + `@model_validator`
+  enforcing `deleted` ↔ `deleted_at` invariants. Backwards compat
+  preserved (existing cards without the field load as `deleted: false`).
+- **`include_deleted=False`** parameter on `iter_cards`,
+  `iter_cards_metadata`, `load_card_by_id`. Default-False inheritance
+  means every retrieval and list path is automatically tombstone-aware.
+- **Retrieval-engine filter** at `engine.py:66-75` (engine bypasses
+  `iter_cards`; needed an explicit filter per Codex eng-review).
+- **MCP tools**: `delete_bookmark(id, user_confirmed)` (lock-first-then-load
+  to prevent stale-snapshot resurrection), `restore_bookmark(id, user_confirmed)`,
+  `list_deleted(limit?)`. `annotate_card`/`set_pin` raise
+  `[TOMBSTONE_BLOCKED]` on tombstoned targets.
+- **Slash command** `/xrestore` (no `/xdelete` this slice — deferred to
+  Slice 7+ per /autoplan premise gate).
+- **`scripts/migrate_v1_to_v2.py`** — three exclusive modes
+  (`--dry-run` / `--apply` / `--rollback`) via argparse mutually
+  exclusive group. `--apply`/`--rollback` require interactive
+  `Type APPLY/ROLLBACK` confirmation unless `--yes`. Per-card
+  byte-exact rollback journal at
+  `{corpus}/migrate_v1_to_v2.rollback.jsonl` — full original `.md`
+  bytes (base64) + sha256, fsync'd BEFORE the corresponding `write_card`
+  mutation so a mid-flight crash leaves a recoverable journal.
+- **Setup wizard** `src/xsensai/entrypoints/setup_wizard.py` (callable
+  via `python -m` or thin wrapper at `scripts/setup.sh`). 9 mutually
+  exclusive flags + `--resume`. State at `~/.cache/xsensai/setup-state.json`
+  enables idempotent resume after partial failure. Each step idempotent:
+  `--deploy-key` skips title-matched keys, `--gh-vars` upserts,
+  `--first-run` checks recent successful runs.
+- **`install_commands.sh` v1 detection** — counts v1 cards and prints
+  *"Detected N v1 cards. Run `./scripts/setup.sh --migrate` ..."* if
+  any exist (closes the onboarding regression both /autoplan voices
+  flagged).
+- **Shadow-mode union merge driver**
+  (`compute_union_candidate` + `append_shadow_union_log`):
+  spec-literal frontmatter union with prefer-local on collision,
+  list union for `tags`/`applicability`/`media.external_urls`, prefer-local
+  body. Logs candidate to `_conflicts.md` per
+  `(run_id, card_path)` — idempotent under the 3-retry rebase loop.
+  Wired BEFORE the existing fail-loud sequence (which destroys index
+  blob access). **Does NOT change rebase outcome** — fail-loud stays
+  primary in Slice 6. Promotion to primary deferred until ≥3 real-world
+  conflicts log zero manual overrides.
+- **Tombstone-aware sync dedup**: new
+  `existing_source_ids_with_tombstones() → Tuple[Set[str], Dict[str, bool]]`
+  helper. Legacy `existing_source_ids()` keeps `Set[str]` signature
+  (Codex caught: signature change would break `service.py:620, 643`
+  callers). Cron honors sticky deletion: `n_skipped_tombstoned` counter
+  in service loop.
+- **5 new error codes**: `TOMBSTONE_BLOCKED`, `NO_ROLLBACK_JOURNAL`,
+  `SETUP_GH_AUTH_REQUIRED`, `SETUP_DEPLOY_KEY_REJECTED`,
+  `SETUP_FIRST_RUN_FAILED`. All full XSensaiError envelopes per the
+  contract.
+- **55 new tests** (628 → 683 default lane). Distribution:
+  `test_tombstone.py` (29), `test_v1_migration.py` (10),
+  `test_git_merge_union_shadow.py` (7), `test_setup_wizard.py` (9).
+
+### Changed
+
+- **`V1_MUTATION_BLOCKED.next_action`** updated from "Wait for Slice 6
+  migration" to "Run `./scripts/setup.sh --migrate` to upgrade this card
+  to v2" (post-DX-review fix). `retryable: True` post-Slice-6.
+- **`paste_bookmark` 24h fingerprint dedup** now sees tombstones via
+  `iter_cards_metadata(include_deleted=True)` so within-window paste
+  dedup still fires after a delete.
+
+### Decisions deferred (per /autoplan premise gate)
+
+- **v1 adapter retained 1 release.** `src/xsensai/storage/v1_adapter.py`
+  stays alive with a `# DEPRECATED` marker. Promote for deletion in
+  Slice 7+ when 0 v1 cards observed for 14 consecutive days. Both
+  models flagged adapter-deletion-in-same-PR as irreversibility risk.
+- **Union merge in shadow mode only.** Spec-literal rules (no per-key
+  cleverness like `pinned: true wins`); promotion to primary in Slice 7+
+  after telemetry confirms zero manual overrides on the union output.
+- **`/xdelete` slash command deferred.** Slice 6 ships MCP tool only;
+  slash wrapper after delete semantics stabilize. Reduces drift +
+  test surface.
+- **`/xrestore` ships in Slice 6.** Closes the "lie until Slice 7" gap
+  in `[TOMBSTONE_BLOCKED].next_action` that both /autoplan DX voices
+  flagged.
+
+### Known limitations (Slice 6)
+
+- **`user_confirmed: bool` is host-attestable**, not user-attestable.
+  Prompt-injection from card body could trick the host LLM into
+  invoking destructive tools with `user_confirmed=True` without
+  explicit user authorization. Mitigation: Slice 7 will add
+  confirmation nonce/handshake. For now, treat card bodies as
+  untrusted input when relaying to host context.
+
 ## [0.6.0.0] - 2026-04-28
 
 Slice 5 — scheduled sync via GitHub Actions cron, plus lazy-extract on
