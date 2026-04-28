@@ -1,0 +1,84 @@
+# Spike #7 throwaway workflow — deploy key + private vault repo push test.
+#
+# DO NOT MERGE THIS FILE. It is a one-off proof workflow that proves the
+# deploy-key-based push path works before Slice 5's real sync.yml lands.
+#
+# To run:
+#  1. ssh-keygen -t ed25519 -N "" -C "xsensai-cron-spike" \
+#       -f /tmp/xsensai-spike-key
+#  2. Add /tmp/xsensai-spike-key.pub to your VAULT repo
+#     (Settings → Deploy keys → "Add deploy key", check "Allow write access").
+#     The vault repo is the OBSIDIAN VAULT one (containing 04_areas/x-bookmarks/),
+#     not this xsensai code repo.
+#  3. Add /tmp/xsensai-spike-key (the PRIVATE half) as a GH Actions secret on THIS
+#     repo (naveedhedayati/xsensai):
+#     gh secret set VAULT_DEPLOY_KEY --body "$(cat /tmp/xsensai-spike-key)"
+#  4. Move this file from .github/workflows-spike/ to .github/workflows/
+#     git mv .github/workflows-spike/spike-7-deploy-key-test.yml \
+#            .github/workflows/spike-7.yml
+#     git add . && git commit -m "spike(7): throwaway deploy-key test"
+#     git push
+#  5. Trigger:
+#     gh workflow run spike-7.yml
+#  6. Watch:
+#     gh run watch
+#  7. Verify in vault repo: a new commit "spike(7): deploy key proof"
+#     should appear, touching only `.cron-spike-test` sentinel file.
+#  8. CLEANUP after green:
+#     - Delete the sentinel: in your vault, `rm .cron-spike-test &&
+#       git commit -am "spike(7) cleanup" && git push`
+#     - Delete the deploy key from vault Settings.
+#     - Delete the secret: gh secret delete VAULT_DEPLOY_KEY
+#     - Delete this workflow file: git rm .github/workflows/spike-7.yml
+#     - Delete the local key: rm /tmp/xsensai-spike-key /tmp/xsensai-spike-key.pub
+#
+# Pass criteria:
+#  - workflow exit 0
+#  - sentinel commit lands in vault repo
+#  - workflow logs contain NO substring of the deploy key (visually inspect)
+
+name: spike-7-deploy-key-test
+
+on:
+  workflow_dispatch:
+
+# Replace with the actual vault repo slug (org/repo).
+# Example: naveedhedayati/obsidian-vault
+env:
+  VAULT_REPO: naveedhedayati/REPLACE_WITH_VAULT_REPO_NAME
+
+jobs:
+  prove-deploy-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout vault via deploy key
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.VAULT_REPO }}
+          ssh-key: ${{ secrets.VAULT_DEPLOY_KEY }}
+          path: vault
+
+      - name: Touch sentinel + commit + push
+        working-directory: vault
+        run: |
+          set -euo pipefail
+          # Identity (committer must exist in commit; deploy key auth handles push)
+          git config user.email "xsensai-cron-spike@example.com"
+          git config user.name  "xsensai-cron-spike"
+
+          # Touch the sentinel
+          date -u +%FT%TZ > .cron-spike-test
+          git add .cron-spike-test
+
+          # Skip commit if nothing changed (idempotent re-run)
+          if git diff --cached --quiet; then
+            echo "no changes — sentinel up-to-date"
+            exit 0
+          fi
+
+          git commit -m "spike(7): deploy key proof"
+          git push
+
+      - name: Verify clean exit
+        run: echo "spike-7 complete — see vault for sentinel commit"
