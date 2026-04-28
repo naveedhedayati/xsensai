@@ -25,7 +25,7 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `/xpin` | Pin / unpin / list pinned cards. V1 cards refused until Slice 6 migration. |
 | `/xask` | Thinking session, live — corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs. |
 | `/xsync` | Ingest new bookmarks from X via XDK. Smart-default extraction (inline ≤5, deferred >5). |
-| `/xextract` | Backfill `retrieval_summary` + `retrieval_tags` for cards left as `extraction_pending: true`. |
+| `/xextract` | Backlog drain: bulk-extract `retrieval_summary` + `retrieval_tags` for cards still `extraction_pending: true` (Slice 5 lazy-extract handles top-3 on /xfind, but bulk drain is faster + ensures non-queried cards get extracted). |
 
 ### Planned
 
@@ -61,6 +61,7 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 Append to your query:
 - `no decay` — disable recency weighting
 - `skip pins` — exclude pinned cards from results
+- `no lazy` — skip lazy-extract on results that have `extraction_pending: true` (faster, but lower retrieval quality on those cards)
 
 ## Inline `/xask` overrides
 
@@ -125,15 +126,63 @@ corpus.
 In practice: any write → `/xfind` works in one session. First query after
 a write is ~5s slower than usual; subsequent queries are normal speed.
 
-## Sync status banner
+## Sync status banner (Slice 4 + Slice 5)
 
-`_sync-status.md` (committed to the vault) records the last `/xsync` run.
-`/xhelp` and `/xfind` will surface a banner when:
-- `consecutive_failures >= 2` — sync has failed twice in a row
+`_sync-status.md` (committed to the vault) records the last `/xsync` and
+cron run. `/xhelp`, `/xfind`, and `/xask` surface a one-line banner when
+ANY of:
+
+- `consecutive_cron_failures >= 2` — cron has failed twice in a row
+- `last_cron_run > 5 days ago` — cron is silently broken
+- `consecutive_failures >= 2` — combined manual + cron failures
 - `last_success > 5 days ago` — corpus is stale
+- `extraction_pending_count >= 50` OR `oldest_pending_age_days >= 30` — extraction backlog growing
+- `last_cron_run is null` — cron is set up but has never fired (informational, points at CRON_SETUP.md)
 
-The banner is a one-line `[INFO/SYNC_STALE]` envelope; clear it by running
-a successful `/xsync`.
+Cron-only counters (`last_cron_run`, `last_cron_success`,
+`consecutive_cron_failures`, `last_cron_runner`) are NEVER reset by manual
+`/xsync` (autoplan E5). A healthy manual sync can no longer mask a dead
+cron pipeline.
+
+Banner cadence is once-per-session via
+`~/.cache/xsensai/banner-state.json` (4-hour cooldown per banner kind) so
+it doesn't nag every command call.
+
+Clear cron-stale by running a successful manual `/xsync` AND fixing the
+underlying cron failure (see `docs/CRON_SETUP.md` token-rotation runbook
+for the most common cause). Clear extraction-backlog by running
+`/xextract backlog`.
+
+## Scheduled sync (Slice 5 — optional, one-time setup)
+
+Slice 5 ships `.github/workflows/sync.yml`: an unattended cron that runs
+every 2 days at 07:00 UTC, fetches new bookmarks, commits + pushes them
+to your vault repo. Cards land with `extraction_pending: true`; `/xfind`
+lazy-extracts top-3 on read; bulk drain via `/xextract`.
+
+**One-time setup**: see `docs/CRON_SETUP.md` (45-90 min for
+first-time setup of GH Actions secrets + deploy key).
+
+**Quick commands**:
+
+```bash
+# Generate the four `gh secret set` commands for cron setup:
+python -m xsensai.entrypoints.headless --emit-secrets-stdin
+
+# Verify env + xdk readiness without burning a token:
+python -m xsensai.entrypoints.headless --check
+
+# Manually trigger a cron run (after secrets configured):
+gh workflow run sync.yml
+```
+
+**Recovery flags** that may appear in the vault:
+
+| Flag file | Meaning | Recovery |
+|---|---|---|
+| `SYNC_AUTH_FAILED.md` | Refresh token rotated/expired | Run `python -m xsensai.sync.setup_oauth --reauth` on Mac, then `gh secret set XSENSAI_X_REFRESH_TOKEN`. Then `git rm SYNC_AUTH_FAILED.md`. |
+| `SYNC_PUSH_REJECTED.md` | Cron's push lost the race after 3 retries | `git pull --rebase` on Mac, resolve, push, re-trigger workflow. |
+| `_conflicts/<run-id>/` | Cross-host conflict — cards manually merged | See `docs/CONFLICT_RESOLUTION.md`. |
 
 ## Mutation safety
 

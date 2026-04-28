@@ -31,14 +31,27 @@ STATUS_FILE_NAME = "_sync-status.md"
 BANNER_FAILURE_THRESHOLD = 2
 BANNER_STALE_DAYS = 5
 
+# Slice 5 — cron-only banner thresholds (independent of manual /xsync).
+# Cron cadence is every 2 days; 5 days = at least 2 missed runs.
+BANNER_CRON_FAILURE_THRESHOLD = 2
+BANNER_CRON_STALE_DAYS = 5
+
+# Slice 5 — extraction backlog growing thresholds (per autoplan E5 + Spike #10).
+EXTRACTION_BACKLOG_COUNT_THRESHOLD = 50
+EXTRACTION_BACKLOG_AGE_DAYS = 30
+
 
 @dataclass
 class SyncStatus:
     """In-memory representation of _sync-status.md.
 
-    Schema matches spec lines 218-227 + Phase 3 additions:
-      - threads_permanently_unfetched (cumulative count, per auto-decision #6)
-      - extraction_pending_count
+    Schema matches spec lines 218-227 + Phase 3 additions + Slice 5
+    cron-only fields (auto-decision Eng E5).
+
+    Manual /xsync updates `last_run`, `last_success`, `consecutive_failures`.
+    Cron updates BOTH the manual fields AND the cron-only mirror fields
+    (`last_cron_run`, `last_cron_success`, `consecutive_cron_failures`),
+    so a healthy manual /xsync cannot mask a dead cron pipeline.
     """
 
     last_run: str
@@ -50,6 +63,13 @@ class SyncStatus:
     total_cards: int = 0
     threads_permanently_unfetched_this_run: int = 0
     threads_permanently_unfetched_cumulative: int = 0
+    # Slice 5 — cron-only mirror (separate from manual). Backwards compatible:
+    # pre-Slice-5 status files read these as None / 0.
+    last_cron_run: Optional[str] = None
+    last_cron_success: Optional[str] = None
+    consecutive_cron_failures: int = 0
+    last_cron_runner: Optional[str] = None  # "github-actions" | "local"
+    oldest_pending_age_days: int = 0
 
     def to_yaml_frontmatter(self) -> str:
         """Render as the frontmatter-only .md spec format."""
@@ -70,6 +90,13 @@ class SyncStatus:
         lines.append(
             f"threads_permanently_unfetched_cumulative: {self.threads_permanently_unfetched_cumulative}"
         )
+        # Slice 5 — cron-only fields. Always written so the schema stays
+        # forward/backward compatible and human-readable.
+        lines.append(f"last_cron_run: {self.last_cron_run or 'null'}")
+        lines.append(f"last_cron_success: {self.last_cron_success or 'null'}")
+        lines.append(f"consecutive_cron_failures: {self.consecutive_cron_failures}")
+        lines.append(f"last_cron_runner: {self.last_cron_runner or 'null'}")
+        lines.append(f"oldest_pending_age_days: {self.oldest_pending_age_days}")
         lines.append("---")
         lines.append("")
         lines.append("Heartbeat written by /xsync. Do not edit by hand — `/xhelp` and")
@@ -136,11 +163,24 @@ class SyncStatus:
             threads_permanently_unfetched_cumulative=_int(
                 "threads_permanently_unfetched_cumulative"
             ),
+            # Slice 5 — defaults preserve pre-Slice-5 file compat.
+            last_cron_run=_opt_str("last_cron_run"),
+            last_cron_success=_opt_str("last_cron_success"),
+            consecutive_cron_failures=_int("consecutive_cron_failures"),
+            last_cron_runner=_opt_str("last_cron_runner"),
+            oldest_pending_age_days=_int("oldest_pending_age_days"),
         )
 
     def should_show_stale_banner(self, *, now: Optional[datetime] = None) -> bool:
-        """True if `/xhelp`/`/xfind` should surface a stale-sync banner."""
+        """True if `/xhelp`/`/xfind` should surface a stale-sync banner.
+
+        Triggers on EITHER manual-sync staleness OR cron-only staleness —
+        a healthy manual /xsync no longer masks a dead cron pipeline
+        (autoplan E5).
+        """
         if self.consecutive_failures >= BANNER_FAILURE_THRESHOLD:
+            return True
+        if self.should_show_cron_stale_banner(now=now):
             return True
         if self.last_success is None:
             return False
@@ -150,6 +190,56 @@ class SyncStatus:
             return False
         now = now or datetime.now(timezone.utc)
         return (now - last) > timedelta(days=BANNER_STALE_DAYS)
+
+    def should_show_cron_stale_banner(
+        self, *, now: Optional[datetime] = None
+    ) -> bool:
+        """True if cron-only health is bad — independent of manual /xsync.
+
+        Per autoplan E5: a successful manual /xsync must NEVER reset
+        cron-only counters; otherwise the banner is masked. This method
+        fires when:
+          - `consecutive_cron_failures >= BANNER_CRON_FAILURE_THRESHOLD`, OR
+          - `last_cron_run > BANNER_CRON_STALE_DAYS` ago, OR
+          - `last_cron_run is None` AND any sync activity exists (cron
+            never ran but manual /xsync did — likely user hasn't set
+            up cron yet; informational not error).
+        """
+        if self.consecutive_cron_failures >= BANNER_CRON_FAILURE_THRESHOLD:
+            return True
+        if self.last_cron_run is None:
+            return False  # never-fired-yet is a setup hint, not staleness
+        try:
+            last = datetime.fromisoformat(
+                self.last_cron_run.replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            return False
+        now = now or datetime.now(timezone.utc)
+        return (now - last) > timedelta(days=BANNER_CRON_STALE_DAYS)
+
+    def should_show_extraction_backlog_banner(self) -> bool:
+        """True if the extraction backlog is past the EXTRACTION_BACKLOG
+        thresholds (count >= 50 OR oldest >= 30 days). Surfaces
+        [INFO/EXTRACTION_BACKLOG_GROWING] in /xfind, /xhelp, /xask.
+
+        Spike #10 finding: body-only retrieval drops top-3 hit rate by
+        ~27pp vs body+tags+summary. Backlog growing = silent /xfind
+        quality decay; this banner is the warning.
+        """
+        if self.extraction_pending_count >= EXTRACTION_BACKLOG_COUNT_THRESHOLD:
+            return True
+        if self.oldest_pending_age_days >= EXTRACTION_BACKLOG_AGE_DAYS:
+            return True
+        return False
+
+    def cron_never_fired(self) -> bool:
+        """True if cron has never run on this corpus.
+
+        Used by /xhelp to show a one-time "cron is configured but has
+        never fired" hint that points the user at docs/CRON_SETUP.md.
+        """
+        return self.last_cron_run is None
 
 
 def write_status(corpus_path: Path, status: SyncStatus) -> Path:
@@ -178,8 +268,17 @@ def update_after_run(
     threads_unfetched_this_run: int = 0,
     last_error: Optional[str] = None,
     now: Optional[datetime] = None,
+    cron_runner: Optional[str] = None,
+    oldest_pending_age_days: int = 0,
 ) -> SyncStatus:
-    """Read existing status, update counters, write back."""
+    """Read existing status, update counters, write back.
+
+    Slice 5: when `cron_runner` is non-None, mirror the run into
+    cron-only counters (`last_cron_run`, `last_cron_success`,
+    `consecutive_cron_failures`). Manual /xsync passes
+    `cron_runner=None` and never touches the cron-only counters
+    (autoplan E5 — prevents manual sync from masking dead cron).
+    """
     now = now or datetime.now(timezone.utc)
     iso_now = now.isoformat()
     prior = read_status(corpus_path)
@@ -193,6 +292,21 @@ def update_after_run(
         last_success = prior.last_success if prior else None
         consecutive += 1
 
+    # Cron-only mirror — never reset by manual /xsync (autoplan E5).
+    last_cron_run = prior.last_cron_run if prior else None
+    last_cron_success = prior.last_cron_success if prior else None
+    consecutive_cron = prior.consecutive_cron_failures if prior else 0
+    last_cron_runner = prior.last_cron_runner if prior else None
+
+    if cron_runner is not None:
+        last_cron_run = iso_now
+        last_cron_runner = cron_runner
+        if success:
+            last_cron_success = iso_now
+            consecutive_cron = 0
+        else:
+            consecutive_cron += 1
+
     new_status = SyncStatus(
         last_run=iso_now,
         last_success=last_success,
@@ -203,6 +317,11 @@ def update_after_run(
         total_cards=total_cards,
         threads_permanently_unfetched_this_run=threads_unfetched_this_run,
         threads_permanently_unfetched_cumulative=cumulative_unfetched + threads_unfetched_this_run,
+        last_cron_run=last_cron_run,
+        last_cron_success=last_cron_success,
+        consecutive_cron_failures=consecutive_cron,
+        last_cron_runner=last_cron_runner,
+        oldest_pending_age_days=oldest_pending_age_days,
     )
     write_status(corpus_path, new_status)
     return new_status
@@ -216,4 +335,8 @@ __all__ = [
     "STATUS_FILE_NAME",
     "BANNER_FAILURE_THRESHOLD",
     "BANNER_STALE_DAYS",
+    "BANNER_CRON_FAILURE_THRESHOLD",
+    "BANNER_CRON_STALE_DAYS",
+    "EXTRACTION_BACKLOG_COUNT_THRESHOLD",
+    "EXTRACTION_BACKLOG_AGE_DAYS",
 ]

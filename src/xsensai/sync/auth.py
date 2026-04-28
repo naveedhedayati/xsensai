@@ -21,11 +21,46 @@ encrypted secret. No XClient code changes needed.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
-from typing import Optional, Protocol, runtime_checkable
+from typing import Iterable, Optional, Protocol, runtime_checkable
 
 from xsensai.errors import XSensaiError
+
+
+# Slice 5 / autoplan E7 — redaction helper for any text persisted to
+# non-committed logs (heartbeat is committed; flag files use static
+# templates). Never use this output for committed flags — those must be
+# fully static (autoplan E7).
+_BEARER_PATTERN = re.compile(r"Bearer\s+[A-Za-z0-9_\-\.~+/=]{8,}", re.IGNORECASE)
+_LONG_TOKEN_PATTERN = re.compile(r"\b[A-Za-z0-9_\-]{32,}\b")
+
+
+def redact_token_strings(
+    text: str,
+    *,
+    extra_secrets: Iterable[str] = (),
+) -> str:
+    """Best-effort redaction of refresh-token / bearer-token shapes.
+
+    For non-committed log output ONLY. Replaces:
+      - `Bearer <token>` → `Bearer <REDACTED>`
+      - any continuous run of >=32 url-safe-base64 chars → `<REDACTED:32+>`
+      - exact matches of any string in `extra_secrets` (e.g., the live
+        env-var value of XSENSAI_X_REFRESH_TOKEN at call time)
+
+    Conservative — false positives on long opaque ids are acceptable;
+    false negatives leak tokens.
+    """
+    if not text:
+        return text
+    out = _BEARER_PATTERN.sub("Bearer <REDACTED>", text)
+    out = _LONG_TOKEN_PATTERN.sub("<REDACTED:32+>", out)
+    for s in extra_secrets:
+        if s and len(s) >= 8:
+            out = out.replace(s, "<REDACTED>")
+    return out
 
 
 KEYCHAIN_SERVICE_NAME = "x-sensai"
@@ -293,4 +328,5 @@ __all__ = [
     "ENV_VAR_NAME",
     "CLIENT_ID_ENV",
     "CLIENT_SECRET_ENV",
+    "redact_token_strings",
 ]

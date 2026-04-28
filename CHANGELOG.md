@@ -2,6 +2,171 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.6.0.0] - 2026-04-28
+
+Slice 5 — scheduled sync via GitHub Actions cron, plus lazy-extract on
+read in `/xfind` (Spike #10 promoted this from polish to load-bearing
+after measuring a 26.7pp recall gap on body-only retrieval). Engine was
+already headless-runnable from Slice 4 UC-1=C; Slice 5 wires up the
+schedule + git-push automation + cross-host conflict resolution + cost
+ceiling.
+
+The /autoplan review surfaced one CRITICAL finding caught before code
+landed: `_sync-status.md` heartbeat conflict would have livelocked
+every cron-after-manual-`/xsync` cycle. Heartbeat fast-path resolver
+(autoplan E1) is the deterministic fix — regenerate from in-memory
+state and continue rebase rather than running through the generic
+fail-loud path.
+
+### Added
+
+- **`/.github/workflows/sync.yml`** — cron schedule `0 7 */2 * *`
+  (every 2 days at 07:00 UTC) + `workflow_dispatch`. Concurrency group
+  `xsensai-sync` (`cancel-in-progress: false`) prevents overlapping
+  runs. Uses an SSH deploy key (write access) to push back to the
+  user's vault repo. No PR-trigger (defense against fork PRs exposing
+  secrets).
+- **`xsensai.entrypoints.headless`** (NEW module) — orchestrator.
+  Reads env (`XSENSAI_X_REFRESH_TOKEN`, `XSENSAI_X_CLIENT_ID`,
+  `XSENSAI_X_CLIENT_SECRET` if Confidential), builds Slice 4 seams
+  (`EnvSecretTokenProvider`, `DeferredExtractor`, `BudgetTracker`),
+  calls `service.run(mode="headless")`, on success calls
+  `git_push.commit_and_push`. Exit codes: 0 full / 0 no-new / 1 partial
+  / 2 fatal. CLI: `--check` (preflight) and `--emit-secrets-stdin`
+  (DX D1 helper that prints ready-to-paste `gh secret set` commands
+  reading from macOS Keychain).
+- **`xsensai.sync.git_push`** — commit + pull-rebase + push with retry
+  up to 3. Stage allowlist (`*.md`, `*.raw.txt`, `_sync-status.md`,
+  `_conflicts/<run-id>/*`, `_conflicts.md`); never `git add -A`.
+  Excludes `*.rej` / `*.local` / `*.remote` outside `_conflicts/`.
+  After max retries: writes static-template `SYNC_PUSH_REJECTED.md`
+  flag (no secret interpolation per autoplan E7).
+- **`xsensai.sync.git_merge`** — cross-host conflict resolver with two
+  branches:
+  - **Heartbeat fast-path** (autoplan E1 / CRITICAL): regenerate
+    `_sync-status.md` from in-memory `SyncStatus` (max-merge counters /
+    timestamps), restage, continue rebase. Without this, every
+    cron-after-manual cycle would livelock.
+  - **Card fail-loud sidecar** (autoplan E2 + spike #8): captures `:2:`
+    (remote) and `:3:` (local) blobs from rebase index BEFORE abort,
+    then `git rebase --abort` → `git reset --hard origin/main` → write
+    `_conflicts/<run-id>/<card>.local|.remote` → log to `_conflicts.md`
+    → commit marker → push. Exit 2 with `[CRON_CONFLICT_UNRESOLVED]`.
+  - Porcelain v2 NUL-delimited parsing (autoplan E6); every parsed
+    path validated through `_assert_inside_corpus` at the boundary.
+- **`xsensai.sync.cost_ceiling.BudgetTracker`** — per-attempt X API
+  call cap, default 200, env override `XSENSAI_CRON_API_CAP`.
+- **`xsensai.sync.lazy_extract`** — claim/release coordination for
+  `/xfind` lazy-extract-on-read. Two-`/xfind`-at-once race protection
+  via `lazy_extract_in_progress` flag under `card_write` lock; 60s
+  stale reclaim. Run-id prefix `lazy-extract-{uuid}`;
+  `service.apply_extraction`'s `is_extraction_owner_path` check
+  accepts it.
+- **`auth.redact_token_strings()`** — best-effort redaction helper for
+  text persisted to non-committed logs (autoplan E7 defense in depth).
+  Bearer-prefix patterns + 32+-char base64-ish runs + caller-supplied
+  extras get scrubbed. Committed flag files use static templates only —
+  separate guarantee verified by `test_no_secrets_in_flags`.
+- **Heartbeat extension** (`heartbeat.py`): 5 new fields —
+  `last_cron_run`, `last_cron_success`, `consecutive_cron_failures`,
+  `last_cron_runner`, `oldest_pending_age_days`. Cron-only counters
+  NEVER reset by manual `/xsync` (autoplan E5 — prevents healthy
+  manual sync from masking dead cron). New banner methods:
+  `should_show_cron_stale_banner()`,
+  `should_show_extraction_backlog_banner()`, `cron_never_fired()`.
+  Pre-Slice-5 status files read with defaults (backwards compatible).
+- **CardFrontmatter fields**: `lazy_extract_in_progress: bool`,
+  `lazy_extract_claim_at: Optional[datetime]` for lazy-extract
+  coordination.
+- **Slash command UX**:
+  - `commands/xfind.md` — lazy-extract pass with progress emit (DX D7),
+    contention surface ("another session is extracting"), failure
+    fallback ("body-only"), hard cap (skip if >3 results need
+    extraction → surface backlog banner instead). New override `no
+    lazy` (with fuzzy match for `lazy off` / `skip lazy`).
+  - `commands/xask.md` — banner integration (banner reach extended to
+    /xask per DX D5, since /xask is the daily command).
+  - `commands/xextract.md` — repositioned as "backlog drain / repair
+    command" rather than routine ritual (Slice 5 lazy-extract makes it
+    optional in steady state).
+  - `commands/xhelp.md` — full Slice 5 section: cron status logic,
+    setup quick-commands, recovery flag table.
+- **Docs**: `docs/CRON_SETUP.md` (45-90 min one-time setup runbook
+  with stopwatch checklist + token rotation runbook + push rejection
+  runbook); `docs/CONFLICT_RESOLUTION.md` (manual
+  `_conflicts/<run-id>/` workflow).
+- **`TROUBLESHOOTING.md`** — extended with all 8 new envelopes:
+  `[COST_LIMIT_REACHED]`, `[SYNC_PUSH_REJECTED]`,
+  `[CRON_CONFLICT_UNRESOLVED]`, `[SYNC_AUTH_FAILED]`,
+  `[INFO/EXTRACTION_BACKLOG_GROWING]`, `[INFO/CRON_NO_NEW_BOOKMARKS]`,
+  `[INFO/CRON_PARTIAL_DUE_TO_COST]`,
+  `[INFO/CRON_RECOVERED_FROM_CONFLICT]`, `[INFO/LAZY_EXTRACT_TRIGGERED]`.
+
+### Changed
+
+- **`SyncMode` literal** in `service.py` extends to include
+  `"headless"`. The literal is the only `service.py` change for
+  cron-context — auto-proceed-dirty plumbing lives in
+  `entrypoints/headless.py` (which never calls `git_check`), keeping
+  the change surgical (autoplan E10).
+- **`service.apply_extraction` authz path** renamed conceptually from
+  `is_retry_path` to `is_extraction_owner_path` and extended to accept
+  `lazy-extract-` prefixed run_ids in addition to `extract-pending`.
+  Same authz discipline; broader path coverage.
+- **`update_after_run`** in `heartbeat.py` accepts a new
+  `cron_runner` parameter. When non-None, mirrors the run into
+  cron-only counters; when None (manual `/xsync`), only updates the
+  legacy fields. This is the autoplan E5 mechanic.
+
+### Test counts
+
+~95 new tests added across 7 files:
+
+| File | Tests | What |
+|---|---|---|
+| `test_cost_ceiling.py` | 14 | BudgetTracker per-attempt cap |
+| `test_heartbeat_cron_fields.py` | 14 | cron-only mirror counters + 3 banner methods + backwards-compat |
+| `test_sync_git_merge.py` | 8 | porcelain v2 parsing + heartbeat fast-path + card fail-loud + path traversal |
+| `test_sync_git_push.py` | 17 | allowlist staging + push retry + flag fallback + recovery template no-secrets |
+| `test_lazy_extract.py` | 9 | claim/release CAS + concurrency + stale reclaim + missing |
+| `test_entrypoints_headless.py` | 9 | preflight + emit-secrets-stdin + missing-env + recovery template no-secrets |
+| `test_auth_redaction.py` | 8 | bearer + long-token + extra-secrets redaction |
+
+589 collected on the default lane, 9 integration-gated, 0 regressions
+on the prior 518.
+
+### Spike Results (pre-build)
+
+- **Spike #7** (deploy key push) — scaffolded in
+  `.github/workflows-spike/spike-7-deploy-key-test.yml` for user to run;
+  not auto-runnable.
+- **Spike #8** (programmatic git rebase) — PASS with finding: plan E2
+  was missing a `git reset --hard origin/main` step between abort and
+  write-sidecars; without it the post-abort push fails non-fast-forward.
+  Adopted in `git_merge.py`.
+- **Spike #9** (since-id idempotency) — PASS via existing dedup +
+  checkpoint test suite (11 tests confirm).
+- **Spike #10** (recall delta body-only vs body+tags+summary) — **MAJOR
+  FINDING**: 26.7 pp top-3 hit rate gap (100% → 73.3%) on the 15-query
+  golden set. Empirically falsified premise 4. Lazy-extract promoted
+  from "UX polish" to "load-bearing." CEO premise gate decision
+  (Approach E) empirically vindicated.
+
+### Deferred to Slice 6
+
+- Tombstone schema (`deleted: true` field on CardFrontmatter +
+  retrieval exclusion + dedup respect) — schema work too big for
+  Slice 5 budget. Replay-write of deleted-on-Mac cards is rare in
+  practice.
+- Union-frontmatter merge driver — replaces fail-loud sidecars; deferred
+  until multi-stream conflict surface is clearer.
+- Per-day cost ceiling persistence — current per-attempt is documented
+  limitation; bump to per-day when usage proves the limitation matters.
+- `git_check.py` porcelain v2 hardening — existing v1 string-slicing
+  works on user-controlled corpus paths and is defended via
+  `_assert_inside_corpus` at the boundary; not bug-fixing, just
+  hardening. Slice 6+ if it surfaces.
+
 ## [0.5.0.1] - 2026-04-26
 
 Post-Slice-4 OAuth fixes that surfaced during the first live `/xsync`

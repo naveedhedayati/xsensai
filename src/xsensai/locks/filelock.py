@@ -52,7 +52,15 @@ from xsensai.storage import sidecar
 log = logging.getLogger(__name__)
 
 
-WriterKind = Literal["xpaste", "xnote", "xpin", "xsync", "xextract", "cron"]
+WriterKind = Literal[
+    "xpaste", "xnote", "xpin", "xsync", "xextract", "cron",
+    # Slice 5 — /xfind acquires card_write briefly during lazy-extract claim
+    # and release paths (lazy_extract.py).
+    "xfind",
+    # Slice 5 — test fixtures that seed cards under the lock without
+    # faking a real slash-command kind.
+    "test-fixture",
+]
 LOCKS_DIR_NAME = ".locks"
 CARD_WRITE_LOCK_NAME = "card_write.lock"
 CARD_WRITE_JSON_NAME = "card_write.json"

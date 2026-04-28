@@ -128,16 +128,13 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 **Description:** Implement `XClient.get_tweet(id)` via XDK's `posts.get_post(id)`. Plumb through `_gather_bookmarks(mode="single", target=...)` so `/xsync 2028162355511583052` actually fetches and writes that one tweet.
 **Files:** [src/xsensai/sync/client.py](src/xsensai/sync/client.py), [src/xsensai/sync/service.py](src/xsensai/sync/service.py), test_sync_service.py.
 
-### Slice 5: GitHub Actions cron + git push + cost ceiling
+### ~~Slice 5: GitHub Actions cron + git push + cost ceiling~~ — CLOSED
 
-**Priority:** P1 (next slice in build sequence)
-**Origin:** Slice 4 deliberately scoped to manual /xsync per /autoplan UC-1=C answered C. Engine is headless-runnable; Slice 5 just needs the cron yaml + secret rotation + push automation.
-**Description:**
-1. `.github/workflows/sync.yml` — cron schedule (every 2-3 days per spec), env secrets for X client_id + refresh token (use `EnvSecretTokenProvider`).
-2. Add `entrypoints.headless.run()` that wraps `service.run` + auto-handles extraction (subagent OR server-side LLM — Slice 5 architectural decision).
-3. Git push + pull-rebase + `SYNC_PUSH_REJECTED.md` flag handling per spec section "Sync automation" step 9.
-4. Cost ceiling: hard cap on per-run X API spend; bail with `[COST_LIMIT_REACHED]` envelope. (Not needed for manual /xsync but cron should not blow up the user's budget on a runaway loop.)
-5. Cross-host conflict resolution per spec line 213-214.
+**Status:** Done in Slice 5 (v0.6.0.0). Architectural decision per
+/autoplan premise gate: lazy-extract on read in `/xfind` instead of
+server-side LLM in cron (preserves "no LLM in CI" reshape; closes the
+spec-promise gap empirically validated by Spike #10's 26.7pp recall
+finding). 95 new tests; all 5 sub-items shipped; 4 spikes ran.
 
 ### Future: bounded-async backlog fetch (T-2 from /autoplan, deferred per recommendation)
 
@@ -164,4 +161,94 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 4. Cost ceiling per-card and per-run.
 5. `[INFO/TRANSCRIBE_DONE]` and `[INFO/TRANSCRIBE_PARTIAL]` envelopes.
 **Files:** new `src/xsensai/sync/transcribe.py`, `commands/xtranscribe.md`.
+
+---
+
+## Slice 5 — deferred items (next in queue: Slice 6 picks them up)
+
+### Slice 6: Tombstone schema for deleted cards
+
+**Priority:** P2 (Slice 6 work — deferred from Slice 5 Eng E4)
+**Origin:** /autoplan Eng review E4. Codex flagged "tombstone deferral creates integrity issues as autonomous writers increase." Slice 5 review confirmed the schema work is genuinely Slice 6 size: `CardFrontmatter` ConfigDict forbids unknown fields per `card.py:36`, so adding `deleted: true` requires schema update + retrieval exclusion + dedup respect + mutation path + tests. Not 10 LoC.
+**Description:** Add `deleted: bool = False` (or `deleted_at: Optional[datetime]`) to `CardFrontmatter`; `dedup.existing_source_ids()` should respect tombstones (cron skips replay-write of deleted cards); retrieval should exclude tombstoned cards; provide a "soft-delete" path via /xnote or a new tool. Replay-write of deleted-on-Mac cards is rare in practice — defer until tombstone friction surfaces.
+**Files:** [src/xsensai/model/card.py](src/xsensai/model/card.py), [src/xsensai/sync/dedup.py](src/xsensai/sync/dedup.py), retrieval modules, mcp_server tool surface.
+
+### Slice 6: Union-frontmatter merge driver
+
+**Priority:** P3 (Slice 6 polish — deferred from Slice 5 Eng E4)
+**Origin:** Slice 5 ships fail-loud `.local`/`.remote` sidecars instead of spec line 213-214's union-frontmatter. Acceptable Slice 5 deviation per /autoplan; replace once multi-stream conflict surface (mobile + paste + cron) is clearer.
+**Description:** Replace `git_merge.resolve_card_conflict_failloud` with a deterministic union-frontmatter resolver: union frontmatter (collision rules: `pinned: true` wins, `notes` arrays union with content-hash dedup, prefer-local for everything else); body prefers local; conflict resolution logged to `_conflicts.md`. Tri-lateral support (3+ hosts) requires either a CRDT-shaped frontmatter or a manual fallback.
+**Files:** [src/xsensai/sync/git_merge.py](src/xsensai/sync/git_merge.py).
+
+### Slice 6: Setup wizard for cron secrets (`scripts/setup.sh`)
+
+**Priority:** P2 (improves DX D1; current --emit-secrets-stdin helper is the manual half)
+**Origin:** docs/CRON_SETUP.md is a 45-90 min manual runbook. A guided wizard could collapse the deploy-key + secret-set + workflow-trigger steps into a single command.
+**Description:** Build out `scripts/setup.sh` (currently a stub) into a full guided wizard: detect missing prereqs, gen deploy key, prompt for vault repo slug, write secrets via `gh`, trigger first manual run, verify green. ~1-2 hr of bash + UX polish.
+**Files:** [scripts/setup.sh](scripts/setup.sh), reference [docs/CRON_SETUP.md](docs/CRON_SETUP.md).
+
+### Slice 5.1: Wire BudgetTracker into XClient (deferred from /review)
+
+**Priority:** P2 (cap is currently advisory, not enforced)
+**Origin:** /review on Slice 5 build (2026-04-28). `BudgetTracker` is
+constructed in `entrypoints/headless.py` but never threaded into XClient
+or service.run. `record_api_call()` and `should_bail()` are never invoked
+from production code paths. The advertised cost cap is fictional;
+defended only by `max_pages=10` (added during /review) and the 10-min
+workflow timeout.
+**Description:** Add `tracker: Optional[BudgetTracker] = None` parameter
+to `XClient.iter_bookmarks` + `XClient.get_thread`, call
+`tracker.record_api_call("bookmark_fetch")` / `"thread_search"` per
+network call. Plumb tracker through `service.run` → `_gather_bookmarks` →
+xclient calls. On `tracker.should_bail()`, raise via
+`tracker.cost_limit_error()`. Estimated ~30 LoC + 3 tests.
+**Files:** [src/xsensai/sync/client.py](src/xsensai/sync/client.py),
+[src/xsensai/sync/service.py](src/xsensai/sync/service.py),
+[src/xsensai/entrypoints/headless.py](src/xsensai/entrypoints/headless.py).
+
+### Slice 5.2: lazy-extract reclaim race (run_id mismatch)
+
+**Priority:** P3 (60s window, narrow blast radius)
+**Origin:** /review on Slice 5 build (2026-04-28). When a /xfind claim
+goes stale (>60s), the reclaim path lets the second caller take ownership.
+But the first caller's host LLM call is still alive — when it returns,
+`apply_extraction(run_id=<old>)` passes the `is_extraction_owner_path`
+check (any `lazy-extract-` prefix) and overwrites the new claim's
+eventual results.
+**Description:** Add `lazy_extract_run_id: Optional[str]` to
+`CardFrontmatter`. `claim_for_lazy_extract` writes it alongside the
+flag + timestamp. `service.apply_extraction` rejects on the
+`lazy-extract-` path when caller's run_id != stored run_id. ~15 LoC + 1
+test.
+**Files:** [src/xsensai/model/card.py](src/xsensai/model/card.py),
+[src/xsensai/sync/lazy_extract.py](src/xsensai/sync/lazy_extract.py),
+[src/xsensai/sync/service.py](src/xsensai/sync/service.py).
+
+### Post-launch: Per-day cost ceiling persistence
+
+**Priority:** P4 (current per-attempt is acceptable; bump to per-day if usage surfaces the limitation)
+**Origin:** /autoplan Eng E9. Current `BudgetTracker` is per-process-attempt; crash + restart resets. Per-day persistence (in heartbeat with UTC-midnight reset) would survive workflow_dispatch retries but adds state machine complexity. Documented limitation; defer.
+**Description:** Persist `api_calls_today` field in `_sync-status.md` heartbeat with UTC-midnight reset. On startup, load same-day counter and continue incrementing.
+**Files:** [src/xsensai/sync/cost_ceiling.py](src/xsensai/sync/cost_ceiling.py), [src/xsensai/sync/heartbeat.py](src/xsensai/sync/heartbeat.py).
+
+### Post-launch: `git_check.py` porcelain v2 hardening
+
+**Priority:** P4 (existing v1 string-slicing works; defended by `_assert_inside_corpus` at boundary)
+**Origin:** /autoplan Eng E6. New Slice 5 modules (git_merge, git_push) use porcelain v2 NUL-delimited parsing; existing modules still use v1 with string slicing. Not bug-fixing — hardening.
+**Description:** Migrate `git_check.py` (and any remaining v1 callers) to `git status --porcelain=v2 -z` with NUL parsing; consolidate via shared helper in a new `xsensai.sync.git_porcelain` module.
+**Files:** [src/xsensai/sync/git_check.py](src/xsensai/sync/git_check.py), possibly new `git_porcelain.py`.
+
+### Post-launch: ApiExtractor (server-side LLM in cron)
+
+**Priority:** P3 (revisit after 30 days of Slice 5 use; Spike #10's 26.7pp recall finding makes this load-bearing for `/xask` quality on never-queried cards)
+**Origin:** /autoplan premise gate Approach B. Slice 5 picked Approach E (lazy-extract on read in `/xfind`) which closes the gap for queried cards but leaves never-queried cards extraction_pending forever. `/xask`'s top-20 retrieval pays the recall tax on those.
+**Description:** New `ApiExtractor(Extractor)` class that calls Anthropic SDK directly with key from new GH Actions secret. Plumbed through `entrypoints.headless` as an alternative to `DeferredExtractor` for cron. Adds Anthropic SDK dep + `ANTHROPIC_API_KEY` secret + ~$5/month at expected volume. Or: separate weekly extraction cron job (Approach G — own concurrency group) to drain the backlog cron deposits.
+**Files:** [src/xsensai/sync/extraction.py](src/xsensai/sync/extraction.py) extension, possibly `.github/workflows/extract.yml`.
+
+### Post-launch: sync_status() MCP tool
+
+**Priority:** P3 (only if Claude Desktop usage of /xsync diagnostics emerges)
+**Origin:** /autoplan open-question A. Already in TODOS pre-Slice-5; Slice 5 didn't ship it. Modeled after `xask_capabilities()`. Cheap (~10 LoC).
+**Description:** MCP tool that returns parsed `_sync-status.md` heartbeat as structured dict. Lets Claude Desktop sessions answer "when did sync last run?" without inferring from corpus state.
+**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py).
 
