@@ -26,12 +26,14 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `/xask` | Thinking session, live — corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs. |
 | `/xsync` | Ingest new bookmarks from X via XDK. Smart-default extraction (inline ≤5, deferred >5). |
 | `/xextract` | Backlog drain: bulk-extract `retrieval_summary` + `retrieval_tags` for cards still `extraction_pending: true` (Slice 5 lazy-extract handles top-3 on /xfind, but bulk drain is faster + ensures non-queried cards get extracted). |
+| `/xrestore` | Restore a soft-deleted card (Slice 6). Lists recently-deleted, pick by number, confirm. To **delete** a card: ask Claude to call `delete_bookmark(id, user_confirmed=True)`. A `/xdelete` shortcut ships in Slice 7+ once delete semantics stabilize. |
 
 ### Planned
 
 | Command | Slice | What it will do |
 |---|---|---|
 | `/xtranscribe` | Future | Process queued video transcriptions |
+| `/xdelete` | Slice 7+ | Slash-command shortcut for `delete_bookmark` (currently MCP-only this slice). |
 
 ## MCP tools (callable from any Claude conversation with MCP configured)
 
@@ -55,6 +57,9 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `get_review_cursor()` | Read the /xnote review walk cursor (UC10). |
 | `set_review_cursor(last_card_id?)` | Update or clear the /xnote review walk cursor (UC10). |
 | `xask_capabilities()` | Read-only deploy-status helper for `/xask` (Slice 3). |
+| `delete_bookmark(id, user_confirmed)` | **Slice 6** — soft-delete a card. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). |
+| `restore_bookmark(id, user_confirmed)` | **Slice 6** — un-delete a tombstoned card. |
+| `list_deleted(limit?)` | **Slice 6** — list recently-deleted cards, newest-first (read-only). |
 
 ## Inline `/xfind` overrides
 
