@@ -24,7 +24,7 @@ by component, then priority).
 4. **Slice 3** — `/xask` + last30days web fork + grounded synthesis (in host Claude Code session, no server-side LLM dep). **Shipped (v0.4.0.0).**
 5. **Slice 4** — XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing. **Shipped (v0.5.0.0).**
 6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + heartbeat instrumentation + `/xhelp` cron banner. **Shipped (v0.6.0.0).**
-7. **Slice 6** — v1→v2 migration + setup wizard + tombstone schema + union-frontmatter merge driver (replaces Slice 5's fail-loud sidecars). (v1 read adapter from Slice 1 deleted then.)
+7. **Slice 6** — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP-only `delete_bookmark`/`restore_bookmark` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release as soft-landing. **Shipped (v0.7.0.0).**
 
 ## Slice 1 — what works
 
@@ -152,6 +152,123 @@ by component, then priority).
     Replay-write of deleted-on-Mac cards is rare in practice.
   - Union-frontmatter merge driver replacing fail-loud sidecars —
     deferred until multi-stream conflict surface is clearer.
+
+## Slice 6 — what works
+
+Slice 6 ships v1→v2 migration with byte-exact rollback, tombstone schema
++ MCP-only delete/restore + `/xrestore` slash command, shadow-mode
+union-frontmatter merge driver, and a guided setup wizard. Single PR.
+Plan + decision audit at
+`~/.claude/plans/immutable-waddling-quokka.md` (with full /autoplan
+review report appended).
+
+- **v1→v2 migration script** (`scripts/migrate_v1_to_v2.py`) — three
+  exclusive modes (`--dry-run` / `--apply` / `--rollback`) via argparse
+  mutually exclusive group; requires interactive `Type APPLY/ROLLBACK`
+  confirmation unless `--yes` is passed. Per-card byte-exact rollback
+  journal at `{corpus}/migrate_v1_to_v2.rollback.jsonl` — full original
+  `.md` bytes (base64) + sha256, fsync'd BEFORE the corresponding
+  `write_card` mutation so rollback restores byte-exact even after a
+  mid-flight crash. `--rollback` reads the journal in reverse, atomically
+  replaces each migrated `.md`, unlinks the new sidecar, archives the
+  journal on success.
+- **v1 read adapter retained** (`src/xsensai/storage/v1_adapter.py`) —
+  per /autoplan eng-review premise gate, NOT deleted in Slice 6. Stays
+  alive for one release as soft-landing if migration corrupts a card
+  discovered later. Promote for deletion when 0 v1 cards observed in
+  corpus for 14 consecutive days.
+- **Tombstone schema** (`src/xsensai/model/card.py`):
+  `deleted: bool = False` + `deleted_at: Optional[datetime] = None`
+  + `@model_validator` enforcing the invariant (deleted=True ↔
+  deleted_at set; deleted=False ↔ deleted_at None). Defaults preserve
+  backward compat with existing v2 cards on disk.
+- **`include_deleted=False` filter** added to `iter_cards`,
+  `iter_cards_metadata`, and `load_card_by_id` ([src/xsensai/storage/corpus.py](src/xsensai/storage/corpus.py)).
+  Default-False means every existing call site inherits exclusion.
+  Internal paths (sync dedup, lazy-extract, /xrestore) pass
+  `include_deleted=True` explicitly.
+- **Retrieval-layer filter** at [src/xsensai/retrieval/engine.py](src/xsensai/retrieval/engine.py):66-75 —
+  per Codex eng-review (retrieval calls QMD → `load_card` directly,
+  not `iter_cards`, so corpus-level filter doesn't apply). CANDIDATE_LIMIT
+  over-fetches enough to absorb tombstone exclusion at top_k.
+- **`paste_bookmark` fingerprint dedup** sees tombstones
+  ([src/xsensai/storage/corpus.py:593](src/xsensai/storage/corpus.py))
+  via `iter_cards_metadata(include_deleted=True)` so within-24h paste
+  dedup still fires after a delete.
+- **MCP tools** ([src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py)):
+  - `delete_bookmark(id, user_confirmed)` — soft-delete; lock-first-then-load
+    pattern (per Codex eng-review) to prevent the lost-update race
+    where concurrent annotate/pin resurrects a deleted card from a
+    stale snapshot.
+  - `restore_bookmark(id, user_confirmed)` — un-tombstone.
+  - `list_deleted(limit?)` — list recently-deleted (read-only).
+  - `annotate_card`/`set_pin` now load with `include_deleted=True` and
+    raise `[TOMBSTONE_BLOCKED]` if the target is deleted.
+  - `[V1_MUTATION_BLOCKED]` `next_action` updated to point at
+    `./scripts/setup.sh --migrate` (post-DX-review fix — was the stale
+    "wait for Slice 6" string).
+- **Slash command**: new `commands/xrestore.md` mirroring `/xpin`'s
+  conversational shape. Lists recently-deleted, picks by number,
+  confirms, calls `restore_bookmark`. NO `/xdelete` slash command this
+  slice (deferred to Slice 7+ per /autoplan premise gate); use the
+  MCP tool directly.
+- **Tombstone-aware sync dedup** ([src/xsensai/sync/dedup.py](src/xsensai/sync/dedup.py)):
+  new `existing_source_ids_with_tombstones() → Tuple[Set[str], Dict[str, bool]]`
+  helper; legacy `existing_source_ids()` keeps `Set[str]` signature
+  for backward compat (Codex caught: signature change would break
+  `service.py:620, 643` callers). `service.run` threads the dict to
+  the per-card write loop; tombstoned source_ids are skipped with a
+  log line and counted into `n_skipped_tombstoned`. Cron honors sticky
+  deletion: a deleted-on-Mac card stays deleted even when its source_id
+  is still in the user's X bookmarks.
+- **Shadow-mode union merge driver**
+  ([src/xsensai/sync/git_merge.py](src/xsensai/sync/git_merge.py)):
+  new `compute_union_candidate(local, remote, base) → (bytes, diff)` —
+  spec-literal rules (frontmatter union with prefer-local on collision;
+  list union for `tags`/`applicability`/`media.external_urls`;
+  prefer-local body). NO clever per-key policy (`pinned: true wins`,
+  etc. were flagged by Codex as new-policy-not-spec-locked; revisited
+  at promotion). New `append_shadow_union_log()` writes to
+  `_conflicts.md` with `(run_id, card_path)` idempotency to prevent
+  3x retry-loop duplication. Wired into `git_push.commit_and_push()`
+  BEFORE the existing fail-loud sequence (which destroys index access
+  to the conflicted blobs); shadow does NOT change rebase outcome —
+  fail-loud stays primary in Slice 6.
+- **Setup wizard**
+  ([src/xsensai/entrypoints/setup_wizard.py](src/xsensai/entrypoints/setup_wizard.py)):
+  guided full-flow mirror of `setup_oauth.py`'s structure. 8 mutually
+  exclusive flags (`--preflight` / `--oauth` / `--deploy-key` /
+  `--gh-secrets` / `--gh-vars` / `--first-run` / `--migrate` /
+  `--all` / `--resume`). State at `~/.cache/xsensai/setup-state.json`
+  enables `--resume` (skip-completed semantics). Each step idempotent:
+  `--deploy-key` queries existing keys via `gh api repos/X/keys` and
+  skips on title match; `--gh-vars` upserts; `--first-run` checks
+  recent successful runs. `scripts/setup.sh` is now a thin wrapper.
+- **`install_commands.sh` v1 detection** — per DX-review fix: after
+  install, count v1 cards in the corpus and print
+  *"Detected N v1 cards. Run `./scripts/setup.sh --migrate` ..."* if any
+  exist. Prevents the onboarding regression both /autoplan voices flagged.
+- **Error envelopes** ([src/xsensai/errors.py](src/xsensai/errors.py)):
+  - `TOMBSTONE_BLOCKED` — canonical envelope referenced from all sites,
+    with a test asserting NO `(Slice 7)` substring anywhere
+    (codification of the dual-voice convergent finding).
+  - `NO_ROLLBACK_JOURNAL` — migration `--rollback` with no journal.
+  - `SETUP_GH_AUTH_REQUIRED`, `SETUP_DEPLOY_KEY_REJECTED`,
+    `SETUP_FIRST_RUN_FAILED` — full XSensaiError envelopes per the
+    contract (cause / attempted / next_action / retryable).
+- **Tests** (+55 new, 683 total): `test_tombstone.py` (29),
+  `test_v1_migration.py` (10), `test_git_merge_union_shadow.py` (7),
+  `test_setup_wizard.py` (9). Covers schema invariants, backward compat,
+  delete/restore flow, mutation guards, retrieval/list filtering,
+  byte-exact rollback (happy + corrupt-line skip), shadow log
+  retry-idempotency, mutual-exclusion CLI contract, error envelope
+  format.
+- **Known limitation (Slice 6)**: `user_confirmed: bool` on
+  `delete_bookmark` and `restore_bookmark` is host-attestable, not
+  user-attestable — the host LLM sets it. Prompt-injection from card
+  body could trick the host into invoking with `user_confirmed=True`
+  without explicit user authorization. Slice 7 will add a confirmation
+  nonce/handshake. Documented in TROUBLESHOOTING.md.
 
 ## Slice 1 — config
 

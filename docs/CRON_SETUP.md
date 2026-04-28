@@ -17,6 +17,18 @@ If you've never set up GitHub Actions secrets or generated a deploy
 key, the time will be on the higher end. The `--emit-secrets-stdin`
 helper (step 5) eliminates the most error-prone step.
 
+> **Slice 6 update — guided wizard.** `./scripts/setup.sh --all`
+> automates steps 0, 3, 4, 5, 6, and 7 below (preflight, OAuth, deploy
+> key, GH secrets, GH variables, first run) plus the v1→v2 migration
+> step. Each step is independently invokable
+> (`--preflight` / `--oauth` / `--deploy-key` / `--gh-secrets` /
+> `--gh-vars` / `--first-run` / `--migrate`) and idempotent — re-running
+> after a partial failure resumes from the failed step via `--resume`.
+> State lives at `~/.cache/xsensai/setup-state.json`. Realistic time
+> after Slice 6: **< 15 min** end-to-end if you have an X dev app
+> client_id pre-created. The manual steps below remain as the
+> reference.
+
 ---
 
 ## Stopwatch checklist
