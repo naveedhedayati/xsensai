@@ -433,3 +433,163 @@ Likely your vault is on a network volume (NFS, iCloud Drive in
 Check that the vault sync isn't paused; verify `ls $XSENSAI_CORPUS_PATH`
 returns quickly. Re-run `/xsync` once the volume is responsive.
 
+---
+
+# Slice 5 — scheduled sync error codes
+
+## `[COST_LIMIT_REACHED]` — cron hit the API call cap
+
+**Cause**: cron made `XSENSAI_CRON_API_CAP` (default 200) X API calls in
+a single run before completing. Either you have a huge backlog (first
+run after a long offline period) or something in the API is misbehaving
+(retries piling up without progress).
+
+**Recover**:
+1. **If it's a one-time backlog**: raise the cap and re-trigger.
+   ```bash
+   gh secret set XSENSAI_CRON_API_CAP --body "1000"
+   gh workflow run sync.yml
+   ```
+   Reset to 200 after the backlog drains.
+2. **If it's persistent**: run `/xsync` from Mac to bypass cron's cap.
+   The next scheduled run resumes from the checkpoint.
+3. **Check for runaway retries**: inspect the GH Actions log for
+   429/5xx response patterns from X.
+
+The flag's `details` field says how many cards committed before bail.
+
+---
+
+## `[SYNC_PUSH_REJECTED]` — cron couldn't push to vault repo
+
+**Cause**: cron's `git push --force-with-lease` was rejected 3 times.
+Usually means you pushed to the vault from Mac at the same window as
+cron, and cron lost the race.
+
+**Recover** (on Mac):
+```bash
+cd /path/to/your/vault
+git pull --rebase origin main          # incorporate any divergence
+# resolve any conflicts in your editor
+git push origin main
+gh workflow run sync.yml               # re-trigger cron
+gh run watch
+git rm SYNC_PUSH_REJECTED.md && git commit -m "cron: push recovered"
+git push origin main
+```
+
+The flag file in your vault contains a static-template recovery script
+(no secrets interpolated — autoplan E7).
+
+---
+
+## `[CRON_CONFLICT_UNRESOLVED]` — cross-host card conflict
+
+**Cause**: cron and your Mac both wrote the same card with different
+content. Cron failed loudly: cards landed in
+`_conflicts/<run-id>/<card>.local` (your Mac's version) and
+`<card>.remote` (cron's version) for manual resolution.
+
+**Recover**: see [docs/CONFLICT_RESOLUTION.md](docs/CONFLICT_RESOLUTION.md).
+Manual review takes ~2-3 minutes per conflicted card.
+
+The `[CRON_CONFLICT_UNRESOLVED]` envelope's `next_action` always
+includes the run-id; look in `_conflicts/<run-id>/` for sidecars.
+
+---
+
+## `[SYNC_AUTH_FAILED]` — refresh token rotated
+
+**Cause**: X rotated your OAuth refresh token (or you revoked the dev
+app). Cron can no longer refresh, all subsequent runs fail.
+
+**Recover** (on Mac):
+```bash
+# 1. Re-authorize locally; updates the Keychain.
+python -m xsensai.sync.setup_oauth --reauth
+
+# 2. Update GitHub Actions secret (shell-portable form).
+security find-generic-password -s x-sensai \
+  -a x-api-refresh-token -w \
+  | gh secret set XSENSAI_X_REFRESH_TOKEN --body -
+
+# 3. Verify with a manual run.
+gh workflow run sync.yml
+gh run watch
+
+# 4. Clean the flag file.
+cd /path/to/your/vault
+git pull origin main
+git rm SYNC_AUTH_FAILED.md && git commit -m "cron: auth recovered"
+git push origin main
+```
+
+The flag file's recovery instructions repeat these steps.
+
+---
+
+## `[INFO/EXTRACTION_BACKLOG_GROWING]` — many cards still pending
+
+**Cause**: `extraction_pending_count >= 50` OR oldest pending card is
+>= 30 days old. Slice 5's lazy-extract handles top-3 hits in `/xfind`,
+but cards never queried stay pending forever — and `/xask`'s top-20
+retrieval pays a recall tax (Spike #10: ~27pp drop body-only).
+
+**Recover**:
+```
+/xextract backlog
+```
+Drains all pending cards via host LLM extraction. Takes ~1-3 seconds
+per card depending on host model. After completion, banner clears on
+next `/xfind`.
+
+If you don't want to drain manually, the banner is informational only —
+your retrieval still works at degraded quality on those cards. But
+plan to drain weekly for steady-state.
+
+---
+
+## `[INFO/CRON_NO_NEW_BOOKMARKS]` — cron ran successfully, found nothing
+
+**Cause**: scheduled cron run; X had no new bookmarks since last sync.
+Heartbeat updated, no commit.
+
+**Recover**: nothing to do. This is the steady-state quiet outcome.
+
+---
+
+## `[INFO/CRON_PARTIAL_DUE_TO_COST]` — cron committed some cards before cap
+
+**Cause**: cron hit `[COST_LIMIT_REACHED]` partway through but
+managed to commit and push the cards it had already written. Next run
+resumes from checkpoint.
+
+**Recover**: typically nothing — next cron run picks up. If you want
+to drain the backlog faster, run `/xsync` from Mac.
+
+---
+
+## `[INFO/CRON_RECOVERED_FROM_CONFLICT]` — heartbeat fast-path resolved conflict
+
+**Cause**: cron's pull-rebase hit a conflict on `_sync-status.md`
+(heartbeat). Slice 5 has a deterministic resolver for this case
+(autoplan E1) — regenerates from in-memory state, max-merges counters,
+continues. No user action needed.
+
+**Recover**: nothing — informational only. Forensic trail in
+`_conflicts.md` if you care to inspect.
+
+---
+
+## `[INFO/LAZY_EXTRACT_TRIGGERED]` — `/xfind` extracted a pending card
+
+**Cause**: a pending card surfaced in `/xfind` results; the lazy-extract
+pass kicked in. Logged for forensic purposes; not user-facing in the
+default render (autoplan DX D7 — log-only by default).
+
+**Recover**: nothing. This is the happy path.
+
+If you want to opt out of lazy extraction for a query, append `no
+lazy` to your `/xfind` invocation. Cards stay extraction_pending until
+you `/xextract backlog` them.
+

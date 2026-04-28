@@ -66,17 +66,37 @@ def test_changelog_has_v0_5_0_0_entry(docs):
     assert "[0.5.0.0]" in docs["CHANGELOG.md"]
 
 
-def test_readme_current_slice_is_4(docs):
-    """README's 'Current slice' line must reference Slice 4."""
+def test_changelog_has_v0_6_0_0_entry(docs):
+    """CHANGELOG must have a v0.6.0.0 entry for Slice 5 (scheduled cron)."""
+    assert "[0.6.0.0]" in docs["CHANGELOG.md"]
+
+
+def test_troubleshooting_covers_slice_5_codes(docs):
+    """All Slice 5 cron error codes must be documented in TROUBLESHOOTING."""
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in [
+        "COST_LIMIT_REACHED",
+        "SYNC_PUSH_REJECTED",
+        "CRON_CONFLICT_UNRESOLVED",
+        "SYNC_AUTH_FAILED",
+        "EXTRACTION_BACKLOG_GROWING",
+    ]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_readme_current_slice_is_5(docs):
+    """README's 'Current slice' line must reference the active slice.
+
+    Updated for Slice 5 (v0.6.0.0): scheduled cron + lazy-extract on read.
+    """
     readme = docs["README.md"]
-    # Find the current-slice line
     current_line = None
     for line in readme.splitlines():
         if "**Current slice:**" in line:
             current_line = line
             break
     assert current_line is not None, "README missing **Current slice:** line"
-    assert "Slice 4" in current_line, f"README current slice not Slice 4: {current_line}"
+    assert "Slice 5" in current_line, f"README current slice not Slice 5: {current_line}"
 
 
 def test_inline_overrides_documented_in_xhelp(docs):

@@ -23,8 +23,8 @@ by component, then priority).
 3. **Slice 2** — locks + sidecar atomic write + `/xpaste` + `/xnote` + `/xpin`. **Shipped (v0.3.0.0).**
 4. **Slice 3** — `/xask` + last30days web fork + grounded synthesis (in host Claude Code session, no server-side LLM dep). **Shipped (v0.4.0.0).**
 5. **Slice 4** — XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing. **Shipped (v0.5.0.0).**
-6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution. (Engine is already headless-runnable per Slice 4 UC-1=C; Slice 5 = wire up the schedule.)
-7. **Slice 6** — v1→v2 migration + setup wizard. (v1 read adapter from Slice 1 deleted then.)
+6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + heartbeat instrumentation + `/xhelp` cron banner. **Shipped (v0.6.0.0).**
+7. **Slice 6** — v1→v2 migration + setup wizard + tombstone schema + union-frontmatter merge driver (replaces Slice 5's fail-loud sidecars). (v1 read adapter from Slice 1 deleted then.)
 
 ## Slice 1 — what works
 
@@ -64,6 +64,95 @@ by component, then priority).
 - 17 new error/info codes; full list in `commands/xhelp.md`. Notable: `[INFO/THREAD_OUTSIDE_7DAY_WINDOW]` + `[INFO/SEARCH_ALL_UNAVAILABLE]` (Spike #6b graceful-degradation outcomes).
 - Pre-flight: `python -m xsensai.sync.setup_oauth --check` verifies preconditions (X dev app client_id, macOS Keychain availability via `keyring`, 127.0.0.1 port binding, xdk import) without burning a real token.
 
+## Slice 5 — what works
+
+- **Scheduled sync via GitHub Actions** (`/.github/workflows/sync.yml`).
+  Cron `0 7 */2 * *` (every 2 days at 07:00 UTC) + manual
+  `workflow_dispatch`. Concurrency group `xsensai-sync` prevents
+  overlapping runs. Uses an SSH deploy key (write access) to push back
+  to the user's vault repo.
+- **`xsensai.entrypoints.headless`** (NEW): orchestrator. Reads env
+  (XSENSAI_X_REFRESH_TOKEN, XSENSAI_X_CLIENT_ID, XSENSAI_X_CLIENT_SECRET
+  if Confidential), builds `EnvSecretTokenProvider` (Slice 4 seam) +
+  `DeferredExtractor` (Slice 4 default for headless) + `BudgetTracker`,
+  calls `service.run(mode="headless")`, on success calls
+  `git_push.commit_and_push`. Exit codes: 0 full / 0 no-new / 1 partial /
+  2 fatal. CLI: `--check` (preflight) + `--emit-secrets-stdin`
+  (DX D1 helper that prints ready-to-paste `gh secret set` commands
+  reading from Keychain).
+- **`xsensai.sync.git_push`** (NEW): commit + pull-rebase + push with
+  retry up to 3. Stage allowlist (`*.md`, `*.raw.txt`,
+  `_sync-status.md`, `_conflicts/<run-id>/*`, `_conflicts.md`); never
+  `git add -A`. Excludes `*.rej` / `*.local` / `*.remote` outside
+  `_conflicts/`. After max retries: writes static-template
+  `SYNC_PUSH_REJECTED.md` flag (no secret interpolation per autoplan E7).
+- **`xsensai.sync.git_merge`** (NEW): cross-host conflict resolver.
+  Two paths:
+  - **Heartbeat fast-path** (autoplan E1 / CRITICAL): on conflict in
+    `_sync-status.md`, regenerates from in-memory `SyncStatus`
+    (max-merge counters/timestamps), restages, continues rebase.
+    Without this, every cron-after-manual cycle would livelock.
+  - **Card fail-loud sidecar** (autoplan E2 + Spike #8): on conflict
+    in `*.md` / `*.raw.txt`, captures `:2:` (remote) and `:3:` (local)
+    blobs from rebase index BEFORE abort, then `git rebase --abort` →
+    `git reset --hard origin/main` → write
+    `_conflicts/<run-id>/<card>.local|.remote` → log to `_conflicts.md`
+    → commit marker → push. Exit 2 with `[CRON_CONFLICT_UNRESOLVED]`.
+    User resolves manually per `docs/CONFLICT_RESOLUTION.md`.
+  - Porcelain v2 NUL-delimited parsing (autoplan E6); every parsed
+    path validated through `_assert_inside_corpus` at the boundary.
+- **`xsensai.sync.cost_ceiling.BudgetTracker`** (NEW): per-attempt X
+  API call cap, default 200, env override `XSENSAI_CRON_API_CAP`.
+  Per-attempt semantics, not per-day (autoplan E9 — documented
+  limitation; GH Actions retry policy must be 0 to prevent
+  multiplicative cost amplification under failure).
+- **`xsensai.sync.lazy_extract`** (NEW): claim/release coordination
+  for `/xfind` lazy-extract-on-read (autoplan + Spike #10 / 26.7pp recall
+  finding). Two-`/xfind`-at-once race protection via
+  `lazy_extract_in_progress` flag under `card_write` lock; 60s stale
+  reclaim. Run-id prefix `lazy-extract-{uuid}`; `service.apply_extraction`'s
+  `is_extraction_owner_path` check accepts it.
+- **Heartbeat extension** (`heartbeat.py`): 5 new fields —
+  `last_cron_run`, `last_cron_success`, `consecutive_cron_failures`,
+  `last_cron_runner`, `oldest_pending_age_days`. Cron-only counters are
+  NEVER reset by manual `/xsync` (autoplan E5 — prevents healthy manual
+  sync from masking dead cron). New banner methods:
+  `should_show_cron_stale_banner()`, `should_show_extraction_backlog_banner()`,
+  `cron_never_fired()`. Pre-Slice-5 status files read with defaults
+  (backwards compatible).
+- **`/xfind` lazy-extract** (`commands/xfind.md`): when search surfaces
+  a top-3 result with `extraction_pending: true`, calls
+  `lazy_extract.claim_for_lazy_extract` → host LLM extraction →
+  `service.apply_extraction` (with `lazy-extract-{uuid}` run_id), then
+  re-renders the result with summary+tags. Concurrency: second `/xfind`
+  on same card sees claim flag, prints `(another session is extracting;
+  body-only)`. Failure path: `release_lazy_claim` + render body-only
+  with footnote. Hard cap: skip lazy pass if >3 results need extraction
+  (banner instead). Override: `no lazy` keyword.
+- **Banner integration**: `/xfind`, `/xask`, `/xhelp` surface ONE-LINE
+  banners for cron-stale / extraction-backlog-growing / cron-never-fired.
+  Once-per-session via `~/.cache/xsensai/banner-state.json` (4-hour
+  cooldown per banner kind). `/xpaste`, `/xnote`, `/xpin` are
+  flow-protected — NO banner.
+- **Auth redaction helper**: `auth.redact_token_strings()` for any
+  text persisted to non-committed logs (autoplan E7 defense in depth).
+  Committed flag files use static templates only — verified by
+  `test_no_secrets_in_flags`.
+- **`SCRIPT.md` updates**: `commands/xfind.md` lazy-extract pass +
+  banner; `commands/xask.md` banner integration; `commands/xextract.md`
+  repositioned as "backlog drain / repair command" (lazy-extract makes
+  it optional in steady state); `commands/xhelp.md` Slice 5 section.
+- **Docs**: `docs/CRON_SETUP.md` (45-90 min one-time setup runbook);
+  `docs/CONFLICT_RESOLUTION.md` (manual `_conflicts/<run-id>/`
+  resolution workflow); `TROUBLESHOOTING.md` extended with all 8 new
+  envelopes.
+- **Decisions deferred to Slice 6** (per autoplan):
+  - Tombstone schema (`deleted: true` field on CardFrontmatter +
+    retrieval exclusion + dedup respect) — Slice 5 scope was too tight.
+    Replay-write of deleted-on-Mac cards is rare in practice.
+  - Union-frontmatter merge driver replacing fail-loud sidecars —
+    deferred until multi-stream conflict surface is clearer.
+
 ## Slice 1 — config
 
 - **`XSENSAI_CORPUS_PATH`** (default `~/Documents/Vault/04_areas/x-bookmarks/`) — where cards live.
@@ -84,8 +173,33 @@ by component, then priority).
 - **`XSENSAI_X_CLIENT_SECRET`** (optional) — required ONLY if your X dev app is a Confidential Client (the dev portal's "Web App" type). Public Clients (Native App / Single Page App) don't need it. `setup_oauth` accepts it via `--client-secret` and persists to Keychain.
 - **`XSENSAI_XSYNC_LOG_MODE`** (default `hash_only`) — `off` | `hash_only` | `full`. Same privacy convention as xask log.
 - **`XSENSAI_XSYNC_LOG_RETENTION_DAYS`** (default `90`) — purge threshold for `python -m xsensai.sync.log purge`.
-- **`XSENSAI_VAULT_DIRTY_PROCEED`** (default unset) — set `1` / `true` / `yes` to permanently opt in to "sync over uncommitted xsync output" without typing `proceed dirty` each time. Mostly relevant for cron later (Slice 5 will detect "headless context" and override).
+- **`XSENSAI_VAULT_DIRTY_PROCEED`** (default unset) — set `1` / `true` / `yes` to permanently opt in to "sync over uncommitted xsync output" without typing `proceed dirty` each time. **Slice 5: ignored in `mode="headless"`** — cron's vault clone is always "dirty"-OK by design (autoplan F8 / TODOS P1 fix); the env var stays for manual /xsync.
 - **macOS Keychain entries** (not env vars, but config-shaped): service `x-sensai`, accounts `x-api-refresh-token` + `x-api-client-id` + `x-api-client-secret` (last only for Confidential clients). Written by `setup_oauth.py`, read by `KeychainTokenProvider` + `get_stored_client_id` + `get_stored_client_secret`. Backed by the `keyring` library which uses Security.framework via PyObjC (no `security` CLI subprocess — keeps the token off `ps -ef`).
+
+## Slice 5 — config
+
+- **`XSENSAI_CRON_API_CAP`** (default `200`) — per-attempt X API call cap
+  for cron. Cron bails with `[COST_LIMIT_REACHED]` when exceeded;
+  next scheduled run resumes from checkpoint. Per-attempt semantics
+  (autoplan E9): GH Actions retry policy must be 0 (set in `sync.yml`)
+  to prevent multiplicative amplification under failure.
+- **GitHub Actions secrets** (NOT env vars on the user's Mac): set on
+  the xsensai repo via `gh secret set`. Required:
+  `XSENSAI_X_REFRESH_TOKEN`, `XSENSAI_X_CLIENT_ID`, `VAULT_DEPLOY_KEY`
+  (private half of the deploy key). Optional:
+  `XSENSAI_X_CLIENT_SECRET` (Confidential clients only).
+- **GitHub Actions variables** (NOT secrets — slug isn't sensitive):
+  `VAULT_REPO` (e.g., `naveedhedayati/obsidian-vault`),
+  `VAULT_CORPUS_SUBPATH` (defaults to `04_areas/x-bookmarks`).
+- **Cron schedule**: `0 7 */2 * *` (every 2 days at 07:00 UTC). Manual
+  `workflow_dispatch` always available.
+- **Banner state file**: `~/.cache/xsensai/banner-state.json` —
+  per-machine, 4-hour cooldown per banner kind. Auto-created by /xfind
+  on first banner suppression. Safe to delete.
+- **`card_write` lock is per-host** (per-checkout). Cross-host
+  coordination is git-only via pull-rebase + `--force-with-lease` +
+  fail-loud sidecar (autoplan E11 — documented to prevent
+  implementer surprise).
 
 ## /xsync override vocabulary
 

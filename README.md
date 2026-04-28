@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 8 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 4 — `/xsync` + `/xextract` (XDK ingestion + smart-default extraction). See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 5 — scheduled sync via GitHub Actions cron + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + cross-host conflict resolution + cost ceiling. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -21,11 +21,12 @@ src/xsensai/         Python package (importable as `xsensai`)
   xask/              /xask orchestration (Slice 3): service.py + log.py + version.py
   synthesis/         Output template + validator + injection-fixture helpers (Slice 3)
   web_fork/          last30days subprocess wrapper, env-scrubbed (Slice 3)
+  entrypoints/       Headless cron orchestrator (Slice 5)
 
 commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md, xsync.md, xextract.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (527 tests; 9 files gated on XSENSAI_RUN_INTEGRATION=1)
+tests/               pytest suite (~625 tests; ~13 gated on XSENSAI_RUN_INTEGRATION=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
   fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)
@@ -34,7 +35,8 @@ tests/               pytest suite (527 tests; 9 files gated on XSENSAI_RUN_INTEG
 
 scripts/             bootstrap_qmd.sh, install_commands.sh, setup.sh (Slice 6 wizard stub)
 spikes/              Verification spike results
-.github/workflows/   CI (pytest on push)
+docs/                Slice 5: CRON_SETUP.md (one-time setup runbook), CONFLICT_RESOLUTION.md (manual `_conflicts/<run-id>/` workflow)
+.github/workflows/   CI (pytest on push) + sync.yml (Slice 5 cron, every 2 days at 07:00 UTC)
 ```
 
 ## Slice 1 — quick start
@@ -96,6 +98,37 @@ python -m xsensai.sync.setup_oauth
 ```
 
 Steady-state cost: **~$1.18/month** for ~50 bookmarks/month with ~10 threaded.
+
+## Scheduled sync (Slice 5, optional, one-time setup)
+
+Slice 5 ships an unattended cron via GitHub Actions. After Slice 4's
+local OAuth setup, you can optionally enable scheduled sync that fires
+every 2 days at 07:00 UTC, fetches new bookmarks, commits them to your
+vault repo, and pushes — no Mac needed for the actual sync.
+
+Realistic TTHW: **45-90 min for first-time** GH Actions secrets setup
+(deploy key + 4 secrets), **5-10 min on a new machine** if secrets
+already exist. The `--emit-secrets-stdin` helper cuts the most
+error-prone step (piping refresh token from Keychain through to
+`gh secret set`).
+
+```bash
+# Helper that prints ready-to-paste `gh secret set` commands:
+python -m xsensai.entrypoints.headless --emit-secrets-stdin
+
+# Verify env + xdk readiness without burning a token:
+python -m xsensai.entrypoints.headless --check
+
+# Manually trigger a cron run (after secrets configured):
+gh workflow run sync.yml
+```
+
+Full setup runbook: [docs/CRON_SETUP.md](docs/CRON_SETUP.md).
+
+When cron lands new cards on the vault, your next `/xfind` lazy-extracts
+the top-3 results' summaries+tags inline (DX surface; details in
+`commands/xfind.md`). For bulk drain or non-queried cards, run
+`/xextract backlog`.
 
 ## Quality gate (F1)
 
