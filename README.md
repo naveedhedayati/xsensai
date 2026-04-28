@@ -1,10 +1,10 @@
 # x-sensai
 
-Personal X bookmark retrieval skill for Claude. MCP server + 8 conversational slash commands that let Claude draw on a curated taste corpus when thinking with the user.
+Personal X bookmark retrieval skill for Claude. MCP server + 9 conversational slash commands that let Claude draw on a curated taste corpus when thinking with the user.
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 5 — scheduled sync via GitHub Actions cron + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + cross-host conflict resolution + cost ceiling. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 6 — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` / `deleted_at` invariant) + MCP `delete_bookmark` / `restore_bookmark` / `list_deleted` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver + guided setup wizard. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -23,17 +23,17 @@ src/xsensai/         Python package (importable as `xsensai`)
   web_fork/          last30days subprocess wrapper, env-scrubbed (Slice 3)
   entrypoints/       Headless cron orchestrator (Slice 5)
 
-commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md, xsync.md, xextract.md)
+commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md, xsync.md, xextract.md, xrestore.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (~625 tests; ~13 gated on XSENSAI_RUN_INTEGRATION=1)
+tests/               pytest suite (~683 tests; ~13 gated on XSENSAI_RUN_INTEGRATION=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
   fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)
   fixtures/qmd_query_output.json   QMD JSON-output schema contract fixture
   eval/golden_set.py F1 quality gate (15 queries, target top-3 ≥ 80%)
 
-scripts/             bootstrap_qmd.sh, install_commands.sh, setup.sh (Slice 6 wizard stub)
+scripts/             bootstrap_qmd.sh, install_commands.sh, setup.sh (Slice 6 guided wizard), migrate_v1_to_v2.py (Slice 6 migration with byte-exact rollback)
 spikes/              Verification spike results
 docs/                Slice 5: CRON_SETUP.md (one-time setup runbook), CONFLICT_RESOLUTION.md (manual `_conflicts/<run-id>/` workflow)
 .github/workflows/   CI (pytest on push) + sync.yml (Slice 5 cron, every 2 days at 07:00 UTC)
@@ -56,7 +56,7 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 #   From Claude Code:       /xfind
 ```
 
-## What works (Slice 1 + Slice 2 + Slice 3 + Slice 4)
+## What works (Slices 1–6)
 
 | Surface | Where | What |
 |---|---|---|
@@ -68,11 +68,13 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 | `/xask` | Claude Code slash command | Thinking session: corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs (Slice 3) |
 | `/xsync` | Claude Code slash command | Ingest new bookmarks from X via XDK; smart-default extraction (inline ≤5, deferred >5) (Slice 4) |
 | `/xextract` | Claude Code slash command | Backfill extraction for cards left as `extraction_pending: true` (Slice 4) |
-| `search_bookmarks` | MCP tool (any Claude conversation) | Structured response: `{hits, meta, rendered_markdown}` |
+| `/xrestore` | Claude Code slash command | Restore a tombstoned card (clears `deleted` + `deleted_at`); pairs with MCP `delete_bookmark` (Slice 6) |
+| `search_bookmarks` | MCP tool (any Claude conversation) | Structured response: `{hits, meta, rendered_markdown}` (tombstone-aware via `include_deleted=False` default) |
 | `get_bookmark` | MCP tool | Full card detail by id (returned by search_bookmarks) |
 | `paste_bookmark` / `recover_aborted_paste` | MCP tools | Powers `/xpaste` (Slice 2) |
-| `annotate_card` | MCP tool | Powers `/xnote` (Slice 2) |
-| `set_pin` / `list_pinned` / `due_cards_for_review` | MCP tools | Powers `/xpin` (Slice 2) |
+| `annotate_card` | MCP tool | Powers `/xnote` (Slice 2) — raises `[TOMBSTONE_BLOCKED]` on tombstoned targets (Slice 6) |
+| `set_pin` / `list_pinned` / `due_cards_for_review` | MCP tools | Powers `/xpin` (Slice 2) — `set_pin` raises `[TOMBSTONE_BLOCKED]` on tombstoned targets (Slice 6) |
+| `delete_bookmark` / `restore_bookmark` / `list_deleted` | MCP tools | Tombstone lifecycle; lock-first-then-load to prevent stale-snapshot resurrection (Slice 6) |
 | `xask_capabilities` | MCP tool | Read-only deploy-status helper for `/xask` (Slice 3) |
 | `ping` | MCP tool | Smoke test (Slice 0) |
 
@@ -130,6 +132,28 @@ the top-3 results' summaries+tags inline (DX surface; details in
 `commands/xfind.md`). For bulk drain or non-queried cards, run
 `/xextract backlog`.
 
+## Slice 6 — guided setup wizard + v1→v2 migration
+
+Slice 6 ships a guided setup wizard (replaces the previous stub) plus a
+byte-exact v1→v2 migration script. New users get a checked, resumable
+install flow; existing v1-corpus users get a safe one-shot migration
+with a per-card rollback journal.
+
+```bash
+# Guided first-run setup (idempotent, --resume if interrupted):
+./scripts/setup.sh
+
+# Migrate existing v1 cards to v2 (dry-run first, then apply):
+python scripts/migrate_v1_to_v2.py --dry-run
+python scripts/migrate_v1_to_v2.py --apply        # prompts: type APPLY
+python scripts/migrate_v1_to_v2.py --rollback    # restores byte-exact originals
+```
+
+`install_commands.sh` prints a v1-card count on every run so you know
+when to migrate. Tombstones (`deleted: true` + `deleted_at`) are now
+first-class: deleted cards are excluded from `/xfind`, `/xask`, and sync
+dedup; `/xrestore` brings them back.
+
 ## Quality gate (F1)
 
 Slice 1 ships with a 15-query golden-set evaluation against the fixture corpus. Current results:
@@ -148,8 +172,8 @@ This validates the autoplan D1 decision — QMD's BM25 ranking is sufficient for
 - **Slice 2** (shipped): locks (`fcntl.flock` + UUID fencing) + atomic sidecar write (`durable_replace` with macOS `F_FULLFSYNC`) + `/xpaste` + `/xnote` + `/xpin` + read-side reindex trigger so paste→find round-trips in one session.
 - **Slice 3** (shipped, v0.4.0.0): `/xask` + last30days web fork + grounded synthesis in the host Claude Code session (no server-side LLM dep).
 - **Slice 4** (shipped, v0.5.0.0): XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing + cross-process index_rebuild lock.
-- **Slice 5**: GitHub Actions cron + git push + cost ceiling. (Engine is already headless-runnable per Slice 4 UC-1=C; Slice 5 = wire up the schedule.)
-- **Slice 6**: v1→v2 migration script + setup wizard. (v1 read adapter from Slice 1 deleted at this point.)
+- **Slice 5** (shipped, v0.6.0.0): GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10) + heartbeat instrumentation.
+- **Slice 6** (shipped, v0.7.0.0): v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP `delete_bookmark` / `restore_bookmark` / `list_deleted` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release; promote for deletion in Slice 7+ once 0 v1 cards observed for 14 consecutive days.
 
 ## Troubleshooting
 
