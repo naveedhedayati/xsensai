@@ -25,7 +25,7 @@ src/xsensai/         Python package (importable as `xsensai`)
 commands/            Slash command source files (xfind.md, xhelp.md, xpaste.md, xnote.md, xpin.md, xask.md, xsync.md, xextract.md)
                      Installed to ~/.claude/commands/ via scripts/install_commands.sh
 
-tests/               pytest suite (475+ tests; ~9 files gated on XSENSAI_RUN_INTEGRATION=1, plus 1 file gated on XSENSAI_RUN_LIVE_X_API=1)
+tests/               pytest suite (527 tests; 9 files gated on XSENSAI_RUN_INTEGRATION=1)
   fixtures/cards/    10 hand-curated v2 cards + 1 v1 card for adapter coverage
   fixtures/verbatim_fuzz/   3 critical adversarial inputs (triple-dash, backticks, ## Content)
   fixtures/prompt_injection/   5 adversarial fixtures with INJECTED_<n> canaries (Slice 3)

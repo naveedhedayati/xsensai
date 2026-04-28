@@ -14,7 +14,9 @@ See `SLICE_0_PLAN.md` (and successive `SLICE_N_PLAN.md` files). The Slice 1 plan
 
 ## Build sequence
 
-Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
+Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md). Open
+follow-up work and deferred polish: see [TODOS.md](./TODOS.md) (organized
+by component, then priority).
 
 1. **Slice 0** — spikes + skeleton + `ping` smoke + `errors.py`. **Shipped (v0.1.0).**
 2. **Slice 1** — card model + retrieval + `search_bookmarks` + `get_bookmark` + `/xfind` + `/xhelp` + v1 read adapter. **Shipped (v0.2.0.0).**
@@ -60,7 +62,7 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 - Schema: 2 new fields on `CardFrontmatter` — `thread_fetch_status`, `xsync_run_id` (S-8 fix; `model/card.py` was missing from original Modify list and would have failed strict validation).
 - Privacy-aware sync log at `~/.cache/xsensai/xsync-log.jsonl` (same chmod 600 + flock pattern as xask). `XSENSAI_XSYNC_LOG_MODE=full` to opt in to full text.
 - 17 new error/info codes; full list in `commands/xhelp.md`. Notable: `[INFO/THREAD_OUTSIDE_7DAY_WINDOW]` + `[INFO/SEARCH_ALL_UNAVAILABLE]` (Spike #6b graceful-degradation outcomes).
-- Pre-flight: `python -m xsensai.sync.setup_oauth --check` verifies preconditions (X dev app client_id, macOS Keychain CLI, 127.0.0.1 port binding, xdk import) without burning a real token.
+- Pre-flight: `python -m xsensai.sync.setup_oauth --check` verifies preconditions (X dev app client_id, macOS Keychain availability via `keyring`, 127.0.0.1 port binding, xdk import) without burning a real token.
 
 ## Slice 1 — config
 
@@ -78,11 +80,12 @@ Shipped releases per version: see [CHANGELOG.md](./CHANGELOG.md).
 
 ## Slice 4 — config
 
-- **`XSENSAI_X_CLIENT_ID`** — your X dev app's client_id. Required for `setup_oauth.py` AND for `/xsync` (the orchestrator builds the XDK client with it).
+- **`XSENSAI_X_CLIENT_ID`** — your X dev app's client_id. Required for `setup_oauth.py` AND for `/xsync` (the orchestrator builds the XDK client with it). After running `setup_oauth`, the value is also persisted in Keychain so /xsync from a fresh Claude Code session works without re-exporting.
+- **`XSENSAI_X_CLIENT_SECRET`** (optional) — required ONLY if your X dev app is a Confidential Client (the dev portal's "Web App" type). Public Clients (Native App / Single Page App) don't need it. `setup_oauth` accepts it via `--client-secret` and persists to Keychain.
 - **`XSENSAI_XSYNC_LOG_MODE`** (default `hash_only`) — `off` | `hash_only` | `full`. Same privacy convention as xask log.
 - **`XSENSAI_XSYNC_LOG_RETENTION_DAYS`** (default `90`) — purge threshold for `python -m xsensai.sync.log purge`.
 - **`XSENSAI_VAULT_DIRTY_PROCEED`** (default unset) — set `1` / `true` / `yes` to permanently opt in to "sync over uncommitted xsync output" without typing `proceed dirty` each time. Mostly relevant for cron later (Slice 5 will detect "headless context" and override).
-- **macOS Keychain entry** (not an env var, but config-shaped): service `x-sensai`, account `x-api-refresh-token`. Written by `setup_oauth.py`, read by `KeychainTokenProvider`.
+- **macOS Keychain entries** (not env vars, but config-shaped): service `x-sensai`, accounts `x-api-refresh-token` + `x-api-client-id` + `x-api-client-secret` (last only for Confidential clients). Written by `setup_oauth.py`, read by `KeychainTokenProvider` + `get_stored_client_id` + `get_stored_client_secret`. Backed by the `keyring` library which uses Security.framework via PyObjC (no `security` CLI subprocess — keeps the token off `ps -ef`).
 
 ## /xsync override vocabulary
 

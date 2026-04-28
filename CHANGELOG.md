@@ -2,6 +2,42 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.5.0.1] - 2026-04-26
+
+Post-Slice-4 OAuth fixes that surfaced during the first live `/xsync`
+against the user's real X account. Both unblock the actual setup path
+the spec assumed would "just work."
+
+### Fixed
+
+- **OAuth client_id / client_secret persisted in macOS Keychain** so
+  `/xsync` from a fresh Claude Code session works without re-exporting
+  `XSENSAI_X_CLIENT_ID` in every shell. `setup_oauth` writes both to
+  the `x-sensai` Keychain service alongside the refresh token; the sync
+  CLI reads them via `auth.get_stored_client_id()` /
+  `get_stored_client_secret()` with env-var override winning.
+  Resolves the symptom "ran setup_oauth, opened a new chat, hit
+  `[OAUTH_CLIENT_ID_MISSING]`." (commit 96f9749)
+- **Confidential OAuth 2.0 client support** (X dev portal's "Web App"
+  type). Public Clients (Native App / Single Page App) work with PKCE
+  alone; Confidential Clients also need a client_secret on token
+  refresh. `setup_oauth` now accepts `--client-secret` (or
+  `XSENSAI_X_CLIENT_SECRET`); the secret threads through `auth.py` →
+  `client.py` → `xdk.Client`. Resolves `[AUTH_FAILED] client_secret is
+  required for token refresh`. (commit ae1cc22)
+
+### Documentation
+
+- TROUBLESHOOTING.md gains entries for the "Something went wrong"
+  callback URL mismatch (port mismatch in the X dev portal) and for
+  the Confidential-client `[AUTH_FAILED]` path.
+- CLAUDE.md `Slice 4 — config` documents `XSENSAI_X_CLIENT_SECRET`,
+  the 3-entry Keychain layout, and the `keyring` library (no
+  `security` CLI subprocess; refresh token stays off `ps -ef`).
+- README test-count updated from "475+" to actual 527; CHANGELOG
+  0.5.0.0 entry stripped a stale claim about a `XSENSAI_RUN_LIVE_X_API`
+  test gate that never landed.
+
 ## [0.5.0.0] - 2026-04-26
 
 Slice 4 — `/xsync` + `/xextract` ship. After this release, you can pull
@@ -70,10 +106,13 @@ you run `/xextract` later to backfill (no grinding wait on big backfills).
   `X_API_RATE_LIMITED`, `X_API_NETWORK_ERROR`, `SYNC_LOCK_HELD`,
   `CORPUS_UNREACHABLE`, `INVALID_FLAGS`; 18 INFO codes covering sync
   lifecycle, thread-fetch outcomes, git surface.
-- **Live integration smoke** (gated on `XSENSAI_RUN_LIVE_X_API=1`): manual
-  end-to-end test against the user's real X account. See
-  `tests/manual/SLICE_4_GAUNTLET.md` (~30 items).
-- **Tests**: +110 across 13 new test files. All 465+ tests pass.
+- **Manual gauntlet checklist** (`tests/manual/SLICE_4_GAUNTLET.md`, ~30
+  items): post-merge human walkthrough against your real X account
+  covering OAuth setup, smart-default extraction, deferred extraction,
+  graceful thread-fetch degradation, conflict envelopes.
+- **Tests**: +110 across 13 new test files. 527 tests collected; 518
+  pass on the default lane (no live X API required), 9 gated on
+  `XSENSAI_RUN_INTEGRATION=1`.
 
 ### Changed
 
