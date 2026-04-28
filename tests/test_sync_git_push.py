@@ -22,8 +22,12 @@ def _git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
 def _setup_local_remote_clone(tmp_path: Path) -> Tuple[Path, Path]:
     """Bare remote + clone. Returns (remote, clone)."""
     remote = tmp_path / "remote.git"
+    # --initial-branch=main pins HEAD to refs/heads/main on the bare repo
+    # so CI clones (whose `init.defaultBranch` may still be "master") get
+    # a working tree after the first push lands.
     subprocess.run(
-        ["git", "init", "--bare", str(remote)], capture_output=True, check=True
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+        capture_output=True, check=True,
     )
     clone = tmp_path / "clone"
     subprocess.run(

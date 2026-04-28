@@ -42,7 +42,15 @@ def _setup_diverged_repos(tmp_path: Path) -> Tuple[Path, Path]:
     conflict on the shared card file.
     """
     remote = tmp_path / "remote.git"
-    subprocess.run(["git", "init", "--bare", str(remote)], capture_output=True, check=True)
+    # --initial-branch=main pins HEAD to refs/heads/main on the bare repo so
+    # CI runners (whose `init.defaultBranch` may still be "master") clone
+    # the right tree after the first push. Without this, clone-b clones an
+    # empty working tree because HEAD points to a branch that never gets
+    # written.
+    subprocess.run(
+        ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+        capture_output=True, check=True,
+    )
 
     clone_a = tmp_path / "clone-a"
     clone_b = tmp_path / "clone-b"
