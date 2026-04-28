@@ -15,6 +15,12 @@ Slice 5 cron).
 Orchestration lives in `xsensai.sync.service`. The slash command is thin —
 no flag parsing per CLAUDE.md, conversational only.
 
+**Slice 6 — sticky deletion.** Cards you've deleted via `delete_bookmark`
+have frontmatter `deleted: true`. Sync skips replay-write of those
+source_ids: even if the bookmark is still in your X account, it stays
+out of the corpus. The number of skipped tombstones is logged.
+Restore via `/xrestore` if you want a deleted card back.
+
 ## Conversational flow
 
 1. **If the user provided text inline** with `/xsync <something>`, treat

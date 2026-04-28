@@ -15,9 +15,15 @@ frontmatter via the `annotate_card` MCP tool. Two modes:
   `why_saved_pending=true` OR `next_review_at<=now`, oldest first
 
 V1 cards (no sidecar) are REFUSED with `[V1_MUTATION_BLOCKED]` per Slice 2
-spec — Slice 6 ships migration. The refusal is logged to
-`{corpus}/_v1-upgraded.jsonl` so migration prioritizes the cards you wanted
-to mutate.
+spec. Slice 6 ships the migration: run `./scripts/setup.sh --migrate` (or
+`python scripts/migrate_v1_to_v2.py --dry-run` to preview). The refusal is
+logged to `{corpus}/_v1-upgraded.jsonl` so migration prioritizes the cards
+you wanted to mutate.
+
+Tombstoned cards (frontmatter `deleted: true`, set by `delete_bookmark`)
+are also REFUSED with `[TOMBSTONE_BLOCKED]`. The remediation is to restore
+the card via `/xrestore` or re-paste via `/xpaste` — `next_action` in the
+rendered error spells this out. Slice 6.
 
 ## Mode dispatch
 
@@ -66,8 +72,10 @@ ones to leave them as-is — pass them as None or omit from the call).
 
 If `ok: true`: show `Annotated {id}.`
 If `ok: false`:
-- `V1_MUTATION_BLOCKED`: show the formatted error verbatim — explain the
-  card stays untouched and Slice 6 migration will surface it.
+- `V1_MUTATION_BLOCKED`: show the formatted error verbatim — its
+  `next_action` now points the user at `./scripts/setup.sh --migrate`.
+- `TOMBSTONE_BLOCKED`: show the formatted error verbatim — the card was
+  deleted and stays deleted; restore via `/xrestore` if intended.
 - Other errors: show `rendered_message` verbatim.
 
 ## Review Walk Mode
