@@ -66,7 +66,9 @@ from xsensai.sync.version import SYNC_SCHEMA_VERSION
 log = logging.getLogger(__name__)
 
 
-SyncMode = Literal["since-last-run", "backlog", "single", "retry-failed", "preview"]
+SyncMode = Literal[
+    "since-last-run", "backlog", "single", "retry-failed", "preview", "headless"
+]
 ExtractionStrategy = Literal["inline", "deferred", "none"]
 
 # UC-2=C threshold: smart-default boundary. <=5 inline, >5 deferred.
@@ -353,8 +355,20 @@ def apply_extraction(
             # overwrite ANY card's retrieval_summary + retrieval_tags by
             # forging --card-id + --run-id.
             card_run_id = card.fm.xsync_run_id
-            is_retry_path = run_id.startswith("extract-pending")
-            if card_run_id is not None and card_run_id != run_id and not is_retry_path:
+            # Slice 5: lazy-extract path uses `lazy-extract-{uuid}` run_id.
+            # Both /xextract retry-failed and lazy-extract are "extraction
+            # owner" paths — i.e., they may overwrite extraction_pending
+            # cards regardless of original xsync_run_id.
+            is_extraction_owner_path = (
+                run_id.startswith("extract-pending")
+                or run_id.startswith("lazy-extract-")
+            )
+            is_retry_path = is_extraction_owner_path  # back-compat alias
+            if (
+                card_run_id is not None
+                and card_run_id != run_id
+                and not is_extraction_owner_path
+            ):
                 return ApplyExtractionResult(
                     card_id=card_id, ok=False, extraction_pending=True,
                     error=(
@@ -376,6 +390,12 @@ def apply_extraction(
                 "retrieval_summary": cleaned_summary,
                 "retrieval_tags": cleaned_tags,
                 "extraction_pending": False,
+                # Slice 5 — clear lazy-extract flags on success so they don't
+                # linger as stale frontmatter state. Safe even when the path
+                # wasn't lazy (manual /xsync inline + /xextract retry-failed
+                # never set the flags, so this is a no-op for those paths).
+                "lazy_extract_in_progress": False,
+                "lazy_extract_claim_at": None,
             })
             new_card = LoadedCard(
                 fm=new_fm, body=card.body, raw_bytes=card.raw_bytes, md_path=card.md_path,
@@ -407,8 +427,16 @@ def finalize_run(
     duration_ms: int = 0,
     mode: str = "since-last-run",
     skip_reindex: bool = False,
+    cron_runner: Optional[str] = None,
 ) -> FinalizeResult:
-    """Heartbeat + archive checkpoint (on success) + reindex under index_rebuild."""
+    """Heartbeat + archive checkpoint (on success) + reindex under index_rebuild.
+
+    Slice 5: when `cron_runner` is non-None (e.g., "github-actions"),
+    the heartbeat update mirrors the run into cron-only counters
+    (`last_cron_run`, `last_cron_success`, `consecutive_cron_failures`).
+    Manual /xsync passes `cron_runner=None` to preserve the autoplan E5
+    invariant that healthy manual sync never resets cron health.
+    """
     corpus = resolve_corpus_path(corpus_path)
     total_cards = sum(1 for _ in iter_cards_metadata(corpus))
 
@@ -420,6 +448,7 @@ def finalize_run(
         total_cards=total_cards,
         threads_unfetched_this_run=threads_unfetched_this_run,
         last_error=last_error,
+        cron_runner=cron_runner,
     )
 
     archived: Optional[Path] = None
@@ -612,7 +641,9 @@ def _gather_bookmarks(
         for bookmark in page.bookmarks:
             sid = str(bookmark.get("id", ""))
             if sid in on_disk:
-                if mode == "since-last-run":
+                # Headless mode (cron) shares since-last-run dedup early-stop:
+                # the cron run isn't trying to backfill, just to catch up.
+                if mode in ("since-last-run", "headless"):
                     consecutive_dedup_hits += 1
                     # Heuristic: 3 consecutive duplicates = we've caught up
                     if consecutive_dedup_hits >= 3:
@@ -925,7 +956,7 @@ def _cli() -> int:
     p_run = sub.add_parser("run", help="Fetch + write step (xsync entrypoint)")
     p_run.add_argument(
         "--mode",
-        choices=["since-last-run", "backlog", "single", "retry-failed", "preview"],
+        choices=["since-last-run", "backlog", "single", "retry-failed", "preview", "headless"],
         default="since-last-run",
     )
     p_run.add_argument("--target", default=None,
