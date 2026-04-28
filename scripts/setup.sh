@@ -1,39 +1,31 @@
 #!/usr/bin/env bash
-# x-sensai setup wizard.
+# x-sensai setup wizard — Slice 6.
 #
-# Slice 0: stub. Slice 6 fills out the full 11-step wizard from the spec:
-#   1. Preflight  (Python, QMD, gh, security CLI, git remote)
-#   2. Install dependencies (hash-locked)
-#   3. Register an X dev app
-#   4. Buy X API credits
-#   5. OAuth 2.0 PKCE flow
-#   6. LLM + transcription API keys
-#   7. Register MCP server with Claude Desktop
-#   8. GitHub Actions secrets
-#   9. v1 -> v2 migration (--dry-run then --apply)
-#  10. First /xsync
-#  11. Schedule the cron
+# Thin wrapper around `python -m xsensai.entrypoints.setup_wizard`.
+# All flags pass through. Common usage:
+#
+#   ./scripts/setup.sh --preflight       # just check prereqs
+#   ./scripts/setup.sh --oauth           # X OAuth PKCE flow (Keychain stored)
+#   ./scripts/setup.sh --migrate         # v1→v2 corpus migration
+#   ./scripts/setup.sh --all             # full guided setup (idempotent)
+#   ./scripts/setup.sh --resume          # synonym for --all (skips done steps)
+#
+# State lives at ~/.cache/xsensai/setup-state.json. Re-running --all after
+# a partial failure resumes from the failed step. Each step is idempotent
+# (deploy-key skips if title-matched key exists; gh-vars upserts; etc.).
 
 set -euo pipefail
 
-cat <<'EOF'
-x-sensai setup wizard - Slice 0 stub.
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-The full 11-step wizard ships in Slice 6. Until then, do this manually:
+# Honor an existing virtualenv if one is active; otherwise prefer the
+# project venv at .venv/. Pure shell-out — no sourcing magic.
+if [ -n "${VIRTUAL_ENV:-}" ]; then
+  PY="$VIRTUAL_ENV/bin/python"
+elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+  PY="$REPO_ROOT/.venv/bin/python"
+else
+  PY="$(command -v python3 || command -v python)"
+fi
 
-  1. brew install uv               # if not already installed
-  2. uv venv                        # creates .venv/
-  3. uv pip install -r requirements.txt
-  4. uv pip install -e .
-  5. pytest                         # confirm tests pass
-  6. Add to ~/Library/Application Support/Claude/claude_desktop_config.json:
-       {
-         "mcpServers": {
-           "xsensai": {
-             "command": "$(pwd)/.venv/bin/xsensai-mcp"
-           }
-         }
-       }
-  7. Restart Claude Desktop. Try "use the xsensai server's ping tool with echo=hello".
-
-EOF
+exec "$PY" -m xsensai.entrypoints.setup_wizard "$@"
