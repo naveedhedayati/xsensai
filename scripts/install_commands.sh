@@ -60,3 +60,10 @@ if compgen -G "$COMMANDS_SRC/*.md" > /dev/null; then
 fi
 echo ""
 echo "If your Claude Code is already running, restart it to pick up the new commands."
+
+# Slice 5 — surface the cron setup hint after install so the user knows
+# scheduled sync is available but unconfigured (DX D4).
+echo ""
+echo "Scheduled sync (Slice 5, optional): see docs/CRON_SETUP.md for setup."
+echo "  python -m xsensai.entrypoints.headless --emit-secrets-stdin   # ready-to-paste setup"
+echo "  python -m xsensai.entrypoints.headless --check                # verify env + xdk"

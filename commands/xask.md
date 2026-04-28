@@ -15,6 +15,17 @@ synthesizes a grounded answer using the locked output template with
 Synthesis happens in YOUR Claude Code session (no separate API call). The
 slash command is thin — orchestration lives in `xsensai.xask.service`.
 
+## Sync-status banner (Slice 5 — auto-prepended)
+
+BEFORE preparing the synthesis, check the vault for `_sync-status.md`.
+Apply the same banner logic as `/xfind` (see commands/xfind.md "Sync-status
+banner" section): cron-stale, legacy-stale, extraction-backlog-growing,
+or cron-never-fired. Once-per-session via
+`~/.cache/xsensai/banner-state.json` (4-hour cooldown).
+
+`/xask` is the daily command for many users; banner reach via /xfind
+alone misses /xask-only users (autoplan DX D5).
+
 ## Conversational flow
 
 1. **If the user provided text inline** with `/xask <question>`, use that
