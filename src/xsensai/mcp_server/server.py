@@ -297,8 +297,32 @@ def _confirmation_required(tool_name: str) -> Dict[str, Any]:
     return _write_error_response(err)
 
 
+def _tombstone_blocked_response(card: "LoadedCard", attempted_op: str) -> Dict[str, Any]:
+    """TOMBSTONE_BLOCKED envelope per Slice 6.
+
+    Single source of truth for the error string. Tests assert exact
+    text — including absence of any "(Slice 7)" suffix — to prevent the
+    stale-string regression that pre-/autoplan plan revisions had.
+    """
+    deleted_at_str = (
+        card.fm.deleted_at.isoformat() if card.fm.deleted_at else "unknown"
+    )
+    err = XSensaiError(
+        code="TOMBSTONE_BLOCKED",
+        cause=f"card {card.id!r} is deleted (deleted_at: {deleted_at_str})",
+        attempted=f"{attempted_op}({card.id!r})",
+        next_action="re-create via /xpaste, or restore via /xrestore",
+        retryable=False,
+    )
+    return _write_error_response(err)
+
+
 def _v1_blocked_response(card_id: str, attempted_op: str) -> Dict[str, Any]:
-    """V1_MUTATION_BLOCKED envelope per UC1+UC8. Slice 6 ships migration."""
+    """V1_MUTATION_BLOCKED envelope per UC1+UC8.
+
+    Slice 6 update: migration is now available. The next_action text points
+    the user at concrete commands instead of saying "wait for Slice 6."
+    """
     try:
         corpus_path_for_msg = corpus.resolve_corpus_path()
         log_hint = f"{corpus_path_for_msg}/_v1-upgraded.jsonl"
@@ -306,16 +330,15 @@ def _v1_blocked_response(card_id: str, attempted_op: str) -> Dict[str, Any]:
         log_hint = "{corpus}/_v1-upgraded.jsonl"
     err = XSensaiError(
         code="V1_MUTATION_BLOCKED",
-        cause=f"Card {card_id!r} is v1-shape; pin/annotate ships in Slice 6 after migration.",
+        cause=f"Card {card_id!r} has v1 schema (no raw_path / raw_checksum)",
         attempted=f"{attempted_op}({card_id!r})",
         next_action=(
-            "v1 cards have no sidecar (no raw_path/raw_checksum). Mutating them now "
-            "would synthesize raw_bytes from the rendered body, losing ## Thread / "
-            "## Video Transcript content. Wait for Slice 6 migration which re-fetches "
-            f"from XDK. Your attempt has been logged to {log_hint} so the migration "
-            "knows to prioritize this card."
+            "Run `./scripts/setup.sh --migrate` to upgrade this card to v2 "
+            "(or `python scripts/migrate_v1_to_v2.py --dry-run` to preview). "
+            f"Your attempt has been logged to {log_hint} so the migration "
+            "can prioritize this card."
         ),
-        retryable=False,
+        retryable=True,  # retryable AFTER migration runs
     )
     return _write_error_response(err)
 
@@ -678,65 +701,76 @@ def annotate_card(
     if not user_confirmed:
         return _confirmation_required("annotate_card")
 
+    # Lock-first-then-load (Slice 6 /review fix — propagated from
+    # delete/restore). Loading before acquiring the lock created a race
+    # window where a concurrent delete_bookmark could complete between
+    # our load and our write, and our stale snapshot would resurrect the
+    # card. Acquiring the lock first closes the window.
     try:
-        card = corpus.load_card_by_id(id)
-    except XSensaiError as e:
-        return _write_error_response(e)
+        corpus_path_for_lock = corpus.resolve_corpus_path()
+        with filelock.with_card_write_lock(corpus_path_for_lock, "xnote") as h:
+            try:
+                card = corpus.load_card_by_id(
+                    id, corpus_path=corpus_path_for_lock, include_deleted=True
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
 
-    # V1 refuse + log (log is best-effort and catches OSError internally;
-    # no XSensaiError to handle from this call path).
-    if _is_v1_card(card):
-        corpus.log_v1_mutation_blocked(corpus.resolve_corpus_path(), id, "annotate")
-        return _v1_blocked_response(id, "annotate_card")
+            # Tombstone gate (Slice 6) — refuse mutation on deleted cards.
+            # Comes before V1 check: a deleted v1 card is still deleted.
+            if card.fm.deleted:
+                return _tombstone_blocked_response(card, "annotate_card")
 
-    # Build mutated frontmatter
-    fm_dict = card.fm.model_dump(mode="python")
-    if why_saved is not None:
-        # Match paste_bookmark semantic: whitespace-only counts as empty
-        # (clearing why_saved by passing "   " should re-flag pending).
-        meaningful = bool(why_saved and why_saved.strip())
-        fm_dict["why_saved"] = why_saved if meaningful else None
-        fm_dict["why_saved_pending"] = not meaningful
-    if applicability is not None:
-        fm_dict["applicability"] = list(applicability)
-    if pinned is not None:
-        fm_dict["pinned"] = bool(pinned)
-    if next_review_at is not None:
-        try:
-            dt = datetime.fromisoformat(next_review_at.replace("Z", "+00:00"))
-            fm_dict["next_review_at"] = dt
-        except ValueError as e:
-            return _write_error_response(XSensaiError(
-                code="DISK_WRITE_FAILED",
-                cause=f"Invalid next_review_at: {next_review_at!r}",
-                attempted=f"annotate_card({id!r})",
-                next_action="next_review_at must be ISO-8601 with timezone (e.g., 2026-05-02T00:00:00Z)",
-                retryable=False,
-                details=str(e),
-            ))
+            # V1 refuse + log (log is best-effort, catches OSError).
+            if _is_v1_card(card):
+                corpus.log_v1_mutation_blocked(corpus_path_for_lock, id, "annotate")
+                return _v1_blocked_response(id, "annotate_card")
 
-    try:
-        new_fm = CardFrontmatter.model_validate(fm_dict)
-    except Exception as e:
-        return _write_error_response(XSensaiError(
-            code="DISK_WRITE_FAILED",
-            cause="Mutated frontmatter failed validation.",
-            attempted=f"annotate_card({id!r})",
-            next_action="The mutation produced invalid frontmatter; check field values.",
-            retryable=False,
-            details=str(e),
-        ))
+            # Build mutated frontmatter
+            fm_dict = card.fm.model_dump(mode="python")
+            if why_saved is not None:
+                # Match paste_bookmark semantic: whitespace-only counts as empty
+                # (clearing why_saved by passing "   " should re-flag pending).
+                meaningful = bool(why_saved and why_saved.strip())
+                fm_dict["why_saved"] = why_saved if meaningful else None
+                fm_dict["why_saved_pending"] = not meaningful
+            if applicability is not None:
+                fm_dict["applicability"] = list(applicability)
+            if pinned is not None:
+                fm_dict["pinned"] = bool(pinned)
+            if next_review_at is not None:
+                try:
+                    dt = datetime.fromisoformat(next_review_at.replace("Z", "+00:00"))
+                    fm_dict["next_review_at"] = dt
+                except ValueError as e:
+                    return _write_error_response(XSensaiError(
+                        code="DISK_WRITE_FAILED",
+                        cause=f"Invalid next_review_at: {next_review_at!r}",
+                        attempted=f"annotate_card({id!r})",
+                        next_action="next_review_at must be ISO-8601 with timezone (e.g., 2026-05-02T00:00:00Z)",
+                        retryable=False,
+                        details=str(e),
+                    ))
 
-    new_card = LoadedCard(
-        fm=new_fm,
-        body=card.body,
-        raw_bytes=card.raw_bytes,
-        md_path=card.md_path,
-    )
+            try:
+                new_fm = CardFrontmatter.model_validate(fm_dict)
+            except Exception as e:
+                return _write_error_response(XSensaiError(
+                    code="DISK_WRITE_FAILED",
+                    cause="Mutated frontmatter failed validation.",
+                    attempted=f"annotate_card({id!r})",
+                    next_action="The mutation produced invalid frontmatter; check field values.",
+                    retryable=False,
+                    details=str(e),
+                ))
 
-    try:
-        with filelock.with_card_write_lock(corpus.resolve_corpus_path(), "xnote") as h:
-            written = corpus.write_card(new_card, h.token)
+            new_card = LoadedCard(
+                fm=new_fm,
+                body=card.body,
+                raw_bytes=card.raw_bytes,
+                md_path=card.md_path,
+            )
+            written = corpus.write_card(new_card, h.token, corpus_path=corpus_path_for_lock)
     except XSensaiError as e:
         return _write_error_response(e)
 
@@ -769,36 +803,45 @@ def set_pin(
     if not user_confirmed:
         return _confirmation_required("set_pin")
 
+    # Lock-first-then-load (Slice 6 /review fix — propagated from
+    # delete/restore). See annotate_card for rationale: closes the race
+    # where concurrent delete_bookmark could complete between load and
+    # write, leaving a stale snapshot to resurrect the card on write.
     try:
-        card = corpus.load_card_by_id(id)
-    except XSensaiError as e:
-        return _write_error_response(e)
+        corpus_path_for_lock = corpus.resolve_corpus_path()
+        with filelock.with_card_write_lock(corpus_path_for_lock, "xpin") as h:
+            try:
+                card = corpus.load_card_by_id(
+                    id, corpus_path=corpus_path_for_lock, include_deleted=True
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
 
-    if _is_v1_card(card):
-        # log is best-effort, catches OSError internally; no XSensaiError to handle.
-        corpus.log_v1_mutation_blocked(corpus.resolve_corpus_path(), id, "pin")
-        return _v1_blocked_response(id, "set_pin")
+            if card.fm.deleted:
+                return _tombstone_blocked_response(card, "set_pin")
 
-    if card.fm.pinned == pinned:
-        return {
-            "ok": True,
-            "id": card.id,
-            "pinned": pinned,
-            "rendered_message": f"Card {card.id!r} already {'pinned' if pinned else 'unpinned'} (no-op).",
-        }
+            if _is_v1_card(card):
+                corpus.log_v1_mutation_blocked(corpus_path_for_lock, id, "pin")
+                return _v1_blocked_response(id, "set_pin")
 
-    fm_dict = card.fm.model_dump(mode="python")
-    fm_dict["pinned"] = pinned
-    new_fm = CardFrontmatter.model_validate(fm_dict)
-    new_card = LoadedCard(
-        fm=new_fm,
-        body=card.body,
-        raw_bytes=card.raw_bytes,
-        md_path=card.md_path,
-    )
-    try:
-        with filelock.with_card_write_lock(corpus.resolve_corpus_path(), "xpin") as h:
-            written = corpus.write_card(new_card, h.token)
+            if card.fm.pinned == pinned:
+                return {
+                    "ok": True,
+                    "id": card.id,
+                    "pinned": pinned,
+                    "rendered_message": f"Card {card.id!r} already {'pinned' if pinned else 'unpinned'} (no-op).",
+                }
+
+            fm_dict = card.fm.model_dump(mode="python")
+            fm_dict["pinned"] = pinned
+            new_fm = CardFrontmatter.model_validate(fm_dict)
+            new_card = LoadedCard(
+                fm=new_fm,
+                body=card.body,
+                raw_bytes=card.raw_bytes,
+                md_path=card.md_path,
+            )
+            written = corpus.write_card(new_card, h.token, corpus_path=corpus_path_for_lock)
     except XSensaiError as e:
         return _write_error_response(e)
 
@@ -954,6 +997,180 @@ def _is_v1_card(card: LoadedCard) -> bool:
     v1 adapter at load time). Slice 2 refuses to mutate these — UC1+UC8.
     """
     return card.fm.raw_path is None and card.fm.raw_checksum is None
+
+
+@mcp.tool()
+def delete_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
+    """Soft-delete a card. The file stays on disk with frontmatter
+    `deleted: true` and `deleted_at: <utc>`. Tombstoned cards are
+    excluded from search, list ops, and dedup; cron skips replay-write
+    of deleted cards (sticky deletion). Restore via `restore_bookmark`
+    or the `/xrestore` slash command.
+
+    USAGE: ask Claude to call this with `user_confirmed=True` after
+    explicit user confirmation. Slice 7+ may add `/xdelete` slash command.
+
+    SECURITY NOTE (Slice 6 known limitation per /autoplan eng review):
+    `user_confirmed: bool` is host-attestable, not user-attestable —
+    the host LLM sets it. Prompt-injection from card body could trick
+    the host into invoking with `user_confirmed=True` without explicit
+    user authorization. Slice 7 adds a confirmation nonce/handshake.
+    For now, mitigate by treating card bodies as untrusted input
+    (`<DATA_TO_ANALYZE>` defense delimiters when echoing to host).
+    """
+    log.info("delete_bookmark: id=%r confirmed=%s", id, user_confirmed)
+    if not user_confirmed:
+        return _confirmation_required("delete_bookmark")
+
+    # Lock-first-then-load (per /autoplan eng review): acquire the
+    # card_write lock BEFORE loading. Otherwise concurrent annotate/pin
+    # could resurrect a deleted card from a stale snapshot.
+    try:
+        corpus_path = corpus.resolve_corpus_path()
+        with filelock.with_card_write_lock(corpus_path, "xdelete") as h:
+            try:
+                card = corpus.load_card_by_id(
+                    id, corpus_path=corpus_path, include_deleted=True
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
+            if card.fm.deleted:
+                return {
+                    "ok": True,
+                    "id": card.id,
+                    "already_deleted": True,
+                    "rendered_message": f"Card {card.id!r} is already deleted (no-op).",
+                }
+            if _is_v1_card(card):
+                # Refuse delete on v1 cards — they need migration first
+                # (their raw_bytes is synthesized; toggling `deleted` would
+                # bake a partial v2 frontmatter onto a v1 card).
+                corpus.log_v1_mutation_blocked(corpus_path, id, "delete")
+                return _v1_blocked_response(id, "delete_bookmark")
+            fm_dict = card.fm.model_dump(mode="python")
+            fm_dict["deleted"] = True
+            fm_dict["deleted_at"] = datetime.now(timezone.utc)
+            new_fm = CardFrontmatter.model_validate(fm_dict)
+            new_card = LoadedCard(
+                fm=new_fm,
+                body=card.body,
+                raw_bytes=card.raw_bytes,
+                md_path=card.md_path,
+            )
+            written = corpus.write_card(new_card, h.token)
+    except XSensaiError as e:
+        return _write_error_response(e)
+
+    return {
+        "ok": True,
+        "id": written.id,
+        "deleted": True,
+        "deleted_at": written.fm.deleted_at.isoformat() if written.fm.deleted_at else None,
+        "rendered_message": f"Deleted {written.id!r}. Restore via /xrestore if needed.",
+    }
+
+
+@mcp.tool()
+def restore_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
+    """Restore a previously soft-deleted card. Sets `deleted: false`
+    and clears `deleted_at`. Card body and raw_bytes are unchanged.
+
+    USAGE: behind /xrestore slash command. user_confirmed must be True.
+
+    Returns `already_active: True` if the card is already non-deleted.
+    """
+    log.info("restore_bookmark: id=%r confirmed=%s", id, user_confirmed)
+    if not user_confirmed:
+        return _confirmation_required("restore_bookmark")
+
+    try:
+        corpus_path = corpus.resolve_corpus_path()
+        with filelock.with_card_write_lock(corpus_path, "xrestore") as h:
+            try:
+                card = corpus.load_card_by_id(
+                    id, corpus_path=corpus_path, include_deleted=True
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
+            if not card.fm.deleted:
+                return {
+                    "ok": True,
+                    "id": card.id,
+                    "already_active": True,
+                    "rendered_message": f"Card {card.id!r} is not deleted (no-op).",
+                }
+            fm_dict = card.fm.model_dump(mode="python")
+            fm_dict["deleted"] = False
+            fm_dict["deleted_at"] = None
+            new_fm = CardFrontmatter.model_validate(fm_dict)
+            new_card = LoadedCard(
+                fm=new_fm,
+                body=card.body,
+                raw_bytes=card.raw_bytes,
+                md_path=card.md_path,
+            )
+            written = corpus.write_card(new_card, h.token)
+    except XSensaiError as e:
+        return _write_error_response(e)
+
+    return {
+        "ok": True,
+        "id": written.id,
+        "restored": True,
+        "rendered_message": f"Restored {written.id!r}.",
+    }
+
+
+LIST_DELETED_DEFAULT_LIMIT = 10
+LIST_DELETED_MAX_LIMIT = 100
+
+
+@mcp.tool()
+def list_deleted(limit: int = LIST_DELETED_DEFAULT_LIMIT) -> Dict[str, Any]:
+    """List recently-deleted cards, ordered by deleted_at DESC.
+
+    Read-only — no user_confirmed needed. Used by /xrestore to populate
+    the "which deleted card?" picker.
+
+    Per /review F4 + Slice 6: uses iter_cards_metadata with
+    include_deleted=True (filters to deleted=True after load).
+    """
+    capped_limit = min(max(1, limit), LIST_DELETED_MAX_LIMIT)
+    try:
+        cards = list(corpus.iter_cards_metadata(include_deleted=True))
+    except XSensaiError as e:
+        return _write_error_response(e)
+    deleted = [c for c in cards if c.fm.deleted]
+    deleted.sort(
+        key=lambda c: c.fm.deleted_at or c.fm.captured,
+        reverse=True,
+    )
+    total = len(deleted)
+    deleted = deleted[:capped_limit]
+    rows = []
+    for c in deleted:
+        if c.fm.source_type == "bookmark":
+            author_or_domain = c.fm.author or "@unknown"
+            source_or_filename = c.fm.source or c.md_path.name
+        else:
+            author_or_domain = "self"
+            source_or_filename = _paste_domain(c.fm.source_url)
+        rows.append({
+            "id": c.id,
+            "source_type": c.fm.source_type,
+            "author_or_domain": author_or_domain,
+            "captured": c.fm.captured.isoformat(),
+            "deleted_at": c.fm.deleted_at.isoformat() if c.fm.deleted_at else None,
+            "why_saved": c.fm.why_saved,
+            "source_or_filename": source_or_filename,
+        })
+    return {
+        "ok": True,
+        "count": len(rows),
+        "total": total,
+        "has_more": total > capped_limit,
+        "deleted": rows,
+    }
 
 
 @mcp.tool()

@@ -67,3 +67,34 @@ echo ""
 echo "Scheduled sync (Slice 5, optional): see docs/CRON_SETUP.md for setup."
 echo "  python -m xsensai.entrypoints.headless --emit-secrets-stdin   # ready-to-paste setup"
 echo "  python -m xsensai.entrypoints.headless --check                # verify env + xdk"
+
+# Slice 6 — detect v1 cards and direct user to migration. Prevents the
+# onboarding regression both /autoplan dual voices flagged: "Slice 6
+# shipped but my v1 cards still error on annotate/pin."
+echo ""
+v1_count=$(python -c "
+import os, sys
+try:
+    from xsensai.storage import corpus, v1_adapter
+    import frontmatter
+    p = corpus.resolve_corpus_path()
+    n = 0
+    for md in p.glob('*.md'):
+        if md.name.startswith('_') or md.name in ('CLAUDE.md', 'README.md'):
+            continue
+        try:
+            post = frontmatter.load(md)
+            if v1_adapter.is_v1_shape(dict(post.metadata)):
+                n += 1
+        except Exception:
+            continue
+    print(n)
+except Exception as e:
+    print(0, file=sys.stderr)
+    print(0)
+" 2>/dev/null)
+if [ "${v1_count:-0}" -gt 0 ]; then
+  echo "Detected $v1_count v1 card(s). Run \`./scripts/setup.sh --migrate\` to upgrade them to v2"
+  echo "(mutations on v1 cards are blocked until migrated). Preview first with:"
+  echo "  python scripts/migrate_v1_to_v2.py --dry-run"
+fi

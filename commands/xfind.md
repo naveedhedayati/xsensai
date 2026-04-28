@@ -14,6 +14,13 @@ If the user's request is for general factual info or web-fresh content,
 politely note that `/xfind` is corpus-only and ask whether they want to
 proceed anyway.
 
+**Slice 6 — tombstoned cards (frontmatter `deleted: true`) are excluded
+from results by default.** The retrieval engine filters them out at the
+QMD candidate stage and over-fetches to keep top_k stable on
+tombstone-heavy corpora. If a card is missing from results that you
+expect to see, it may have been deleted via `delete_bookmark`. Use
+`/xrestore` to bring it back.
+
 ## Sync-status banner (Slice 4 + Slice 5 — auto-prepended)
 
 BEFORE running the search, check the vault for `_sync-status.md`.

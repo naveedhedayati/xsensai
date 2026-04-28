@@ -164,7 +164,62 @@ finding). 95 new tests; all 5 sub-items shipped; 4 spikes ran.
 
 ---
 
-## Slice 5 — deferred items (next in queue: Slice 6 picks them up)
+## Slice 6 — what shipped (v0.7.0.0, see CHANGELOG)
+
+### ~~Slice 6: Tombstone schema~~ — CLOSED
+**Status:** Done in Slice 6 (v0.7.0.0). `deleted: bool = False` + `deleted_at: Optional[datetime] = None` on `CardFrontmatter`, `@model_validator` for invariants, `include_deleted=False` filter cascading through corpus + retrieval engine + MCP tools, `delete_bookmark`/`restore_bookmark`/`list_deleted` MCP tools (lock-first-then-load), `/xrestore` slash command, tombstone-aware sync dedup with sticky deletion. /xdelete slash command deferred to Slice 7+ (see below).
+
+### ~~Slice 6: Union-frontmatter merge driver~~ — CLOSED (shadow mode)
+**Status:** Done in Slice 6 in **shadow mode** (v0.7.0.0). `compute_union_candidate` computes spec-literal union (frontmatter union + prefer-local body, list union for `tags`/`applicability`/`media.external_urls`); `append_shadow_union_log` writes idempotent entries to `_conflicts.md`. **Does NOT change rebase outcome** — fail-loud stays primary. Promotion gate is now Slice 7+ work.
+
+### ~~Slice 6: Setup wizard~~ — CLOSED
+**Status:** Done in Slice 6 (v0.7.0.0). Full wizard at `src/xsensai/entrypoints/setup_wizard.py` with `--preflight` / `--oauth` / `--deploy-key` / `--gh-secrets` / `--gh-vars` / `--first-run` / `--migrate` / `--all` / `--resume`. Idempotent steps + `~/.cache/xsensai/setup-state.json` for resume after partial failure.
+
+### ~~Slice 6: v1→v2 migration~~ — CLOSED
+**Status:** Done in Slice 6 (v0.7.0.0). `scripts/migrate_v1_to_v2.py` with `--dry-run` / `--apply` / `--rollback` (mutually exclusive). Per-card byte-exact rollback journal at `{corpus}/migrate_v1_to_v2.rollback.jsonl`. v1 adapter retained one release as soft-landing.
+
+---
+
+## Slice 7+ — items deferred from Slice 6 /autoplan
+
+### Slice 7+: Promote union merge from shadow to primary
+
+**Priority:** P2 (when telemetry confirms zero manual overrides)
+**Origin:** Slice 6 /autoplan premise-gate decision. Both Codex and Claude subagent flagged silent-corruption risk in replacing fail-loud directly. Shadow mode logs the union candidate; promotion gate requires ≥3 real-world conflicts logged with zero manual overrides AND explicit per-key policy review (pinned, deleted, extraction_pending).
+**Description:** Replace the fail-loud invocation in `git_push.commit_and_push()` with `compute_union_candidate` + write merged bytes + `git add` + `git rebase --continue`. Remove `_conflicts/<run-id>/` directory writes. Update `docs/CONFLICT_RESOLUTION.md` to reflect auto-merge.
+**Files:** [src/xsensai/sync/git_push.py](src/xsensai/sync/git_push.py), [src/xsensai/sync/git_merge.py](src/xsensai/sync/git_merge.py), [docs/CONFLICT_RESOLUTION.md](docs/CONFLICT_RESOLUTION.md).
+
+### Slice 7+: Delete v1 adapter
+
+**Priority:** P3 (after gate condition observed)
+**Origin:** Slice 6 /autoplan premise-gate decision. Adapter kept as soft-landing; promote when both gates pass: 0 v1 cards observed for 14 consecutive days AND `_v1-upgraded.jsonl` shows `event: migrated` rows for all known v1 ids.
+**Description:** Delete `src/xsensai/storage/v1_adapter.py`, remove `_is_v1_card` + `_v1_blocked_response` + `V1_MUTATION_BLOCKED` from `src/xsensai/mcp_server/server.py` and `src/xsensai/errors.py`, update CLAUDE.md build sequence.
+**Files:** [src/xsensai/storage/v1_adapter.py](src/xsensai/storage/v1_adapter.py), [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), [src/xsensai/errors.py](src/xsensai/errors.py).
+
+### Slice 7+: `/xdelete` slash command
+
+**Priority:** P3 (after delete semantics stabilize)
+**Origin:** Slice 6 /autoplan premise-gate decision. MCP tool ships in Slice 6; slash command deferred to reduce drift + test surface while semantics settle.
+**Description:** Add `commands/xdelete.md` mirroring `/xpin` pattern. Single prompt → search/disambiguate → confirm → call `delete_bookmark(id, user_confirmed=True)`. Update `commands/xhelp.md` to remove the "MCP-only" caveat once shipped.
+**Files:** [commands/xdelete.md](commands/xdelete.md) (new), [commands/xhelp.md](commands/xhelp.md).
+
+### Slice 7+: Confirmation nonce/handshake for destructive tools
+
+**Priority:** P2 (security hardening)
+**Origin:** Slice 6 /autoplan eng-review. Both voices flagged `user_confirmed: bool` as host-attestable, not user-attestable — prompt-injection from card body could trick the host LLM into invoking `delete_bookmark(user_confirmed=True)` without explicit user authorization.
+**Description:** Two-call handshake. First call (e.g., `request_destructive_token(operation, target_id)`) returns a short-lived nonce visible to the user (e.g., printed in the conversation). User must explicitly echo the nonce; the destructive tool then takes a `confirmation_nonce` arg matched against the recent issuance. Supersedes `user_confirmed: bool` for `delete_bookmark` and `restore_bookmark`.
+**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), new module for nonce store.
+
+### Slice 7+: Tri-lateral conflict resolution
+
+**Priority:** P3 (when mobile writer ships)
+**Origin:** Slice 6 shadow union is 2-way only (local + remote; 3-way base used only for list-union dedup). Tri-lateral surface emerges when mobile writer (spec line 192) ships.
+**Description:** Either CRDT-shaped frontmatter (per spec line 213) or a documented manual fallback for 3+ writer divergence.
+**Files:** [src/xsensai/sync/git_merge.py](src/xsensai/sync/git_merge.py).
+
+---
+
+## Slice 5 — deferred items (originally for Slice 6 — now Slice 7+ items above)
 
 ### Slice 6: Tombstone schema for deleted cards
 

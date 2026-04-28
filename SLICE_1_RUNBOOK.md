@@ -45,8 +45,8 @@ After step 6:
 
 The corpus path is `$XSENSAI_CORPUS_PATH` (defaults to `~/Documents/Vault/04_areas/x-bookmarks/`).
 
-- **You have v1 cards already** (the typical case): the v1 read adapter (UC1) loads them in-memory; `/xfind` returns real results immediately.
-- **Empty corpus**: `/xfind` returns `[CORPUS_UNAVAILABLE]` with a pointer to add cards or wait for Slice 6 migration.
+- **You have v1 cards already** (the typical case): the v1 read adapter (UC1) loads them in-memory; `/xfind` returns real results immediately. As of Slice 6 (v0.7.0.0) you can migrate them in place via `python scripts/migrate_v1_to_v2.py --dry-run` then `--apply` (per-card byte-exact rollback journal).
+- **Empty corpus**: `/xfind` returns `[CORPUS_UNAVAILABLE]` with a pointer to add cards or run `/xsync` (Slice 4+) to ingest from X.
 - **Path doesn't exist**: same `[CORPUS_UNAVAILABLE]` with a pointer to fix `XSENSAI_CORPUS_PATH`.
 
 ## Verifying

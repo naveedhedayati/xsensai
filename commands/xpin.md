@@ -12,7 +12,12 @@ are stored in card frontmatter as `pinned: true` and persist atomically via
 `set_pin` (MCP tool, requires `user_confirmed=True`).
 
 V1 cards (no sidecar) are REFUSED with `[V1_MUTATION_BLOCKED]` per Slice 2
-spec — Slice 6 ships migration.
+spec. Slice 6 ships the migration: run `./scripts/setup.sh --migrate` (or
+`python scripts/migrate_v1_to_v2.py --dry-run` to preview).
+
+Tombstoned cards (frontmatter `deleted: true`) are REFUSED with
+`[TOMBSTONE_BLOCKED]` (Slice 6). Restore via `/xrestore` if you want
+to re-pin a deleted card.
 
 ## Mode dispatch
 
@@ -51,8 +56,11 @@ On `y`: call `set_pin(id=..., pinned=True, user_confirmed=True)`.
 
 If `ok: true`: show `rendered_message` (e.g., "Pinned `{id}`.")
 If already pinned (no-op): show the no-op message verbatim.
-If error: show `rendered_message` verbatim. For V1_MUTATION_BLOCKED,
-explain the card stays untouched and Slice 6 will surface it.
+If error: show `rendered_message` verbatim.
+- `V1_MUTATION_BLOCKED`: the card's `next_action` now points to
+  `./scripts/setup.sh --migrate` — run that to upgrade the card.
+- `TOMBSTONE_BLOCKED` (Slice 6): the card was deleted; restore via
+  `/xrestore` if you want it back.
 
 ## Unpin Mode
 

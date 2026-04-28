@@ -333,13 +333,44 @@ def commit_and_push(
                     )
                 # Rebase succeeded; fall through to push below.
             else:
-                # Card conflict — fail-loud sequence.
+                # Card conflict.
+                card_paths = [
+                    p for p in conflicts
+                    if git_merge.classify_conflict(p) != "heartbeat"
+                ]
+                # Slice 6: BEFORE the fail-loud sequence (which abort+resets
+                # the rebase index, destroying access to the conflicted
+                # blobs), compute the shadow union candidate per card and
+                # append to _conflicts.md. Idempotent — if commit_and_push
+                # retries on the same conflict, the log won't double-write.
+                # Shadow does NOT change actual rebase outcome (fail-loud
+                # stays primary).
+                for card_path in card_paths:
+                    try:
+                        local = git_merge._read_index_blob(corpus_path, 3, card_path)
+                        remote = git_merge._read_index_blob(corpus_path, 2, card_path)
+                        base = git_merge._read_index_blob(corpus_path, 1, card_path)
+                    except Exception as e:
+                        log.warning("shadow union: blob read failed for %s: %s", card_path, e)
+                        continue
+                    if local is None or remote is None:
+                        continue
+                    try:
+                        _, diff_summary = git_merge.compute_union_candidate(
+                            local, remote, base
+                        )
+                        git_merge.append_shadow_union_log(
+                            corpus_path,
+                            run_id=run_id,
+                            card_path=card_path,
+                            diff_summary=diff_summary,
+                        )
+                    except Exception as e:
+                        log.warning("shadow union compute/log failed for %s: %s", card_path, e)
+                # Now the fail-loud sequence runs unchanged.
                 resolutions = git_merge.resolve_card_conflict_failloud(
                     corpus_path,
-                    conflicting_paths=[
-                        p for p in conflicts
-                        if git_merge.classify_conflict(p) != "heartbeat"
-                    ],
+                    conflicting_paths=card_paths,
                     run_id=run_id,
                     remote_ref=remote_ref,
                 )

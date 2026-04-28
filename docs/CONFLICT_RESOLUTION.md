@@ -25,6 +25,16 @@ This is a manual-resolution workflow. There's no `/xresolve` slash command
 in Slice 5; conflicts are rare enough that a documented manual workflow
 is sufficient. (If conflicts become routine, file a TODO entry.)
 
+> **Slice 6 update — shadow union log.** Cron now also computes a
+> deterministic union-merge candidate per spec line 213-214 and writes a
+> log entry to `_conflicts.md` with the diff (`would_have_merged` /
+> `would_have_dropped` / byte sizes). The shadow union does NOT change
+> the rebase outcome — fail-loud sidecars stay primary in Slice 6. The
+> shadow log is for review-and-promote: if you eyeball recent shadow
+> entries and the union outcome would have been correct in every case,
+> Slice 7+ promotes the union resolver to primary. See
+> `~/.claude/plans/immutable-waddling-quokka.md` for the promotion gate.
+
 ---
 
 ## Worked example

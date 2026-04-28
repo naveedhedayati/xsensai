@@ -52,6 +52,7 @@ from xsensai.sync.checkpoint import CheckpointFile, CheckpointRecord
 from xsensai.sync.client import ThreadFetchResult, XClient
 from xsensai.sync.dedup import (
     existing_source_ids,
+    existing_source_ids_with_tombstones,
     source_id_exists_under_lock,
 )
 from xsensai.sync.extraction import (
@@ -173,8 +174,16 @@ def run(
         )
 
     # 1. Build dedup set (precomputed) BEFORE any network call.
-    on_disk = existing_source_ids(corpus_path=corpus)
-    log.info("Dedup precomputed: %d existing source_ids on disk", len(on_disk))
+    # Slice 6: also collect tombstone state per source_id so we can honor
+    # sticky deletion (cron skips replay-write of deleted-on-Mac cards).
+    on_disk, tombstoned_by_source_id = existing_source_ids_with_tombstones(
+        corpus_path=corpus
+    )
+    n_tombstoned = sum(1 for v in tombstoned_by_source_id.values() if v)
+    log.info(
+        "Dedup precomputed: %d existing source_ids on disk (%d tombstoned)",
+        len(on_disk), n_tombstoned,
+    )
 
     # 2. Fetch from XDK based on mode.
     try:
@@ -224,8 +233,16 @@ def run(
     threads_unfetched = 0
     info_envelopes: List[str] = []
 
+    n_skipped_tombstoned = 0
     for bookmark in bookmarks_to_write:
         sid = str(bookmark.get("id", "")).strip()
+        # Slice 6 — sticky tombstone respect. If this source_id corresponds
+        # to a tombstoned card on disk, skip the write entirely (and skip
+        # the thread fetch — saves an X API call).
+        if sid and tombstoned_by_source_id.get(sid, False):
+            log.info("Skipping tombstoned source_id=%s (sticky deletion)", sid)
+            n_skipped_tombstoned += 1
+            continue
         # Compute thread fetch in advance (no lock needed — pure fetch).
         # F3 fix: wrap in try/except so a single bookmark's thread failure
         # (rate-limit, network, etc.) doesn't tear down the whole run.
