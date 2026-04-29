@@ -132,3 +132,62 @@ def test_check_via_cli(monkeypatch, capsys):
     # Either way, return code should match.
     assert rc in (0, 2)
     assert ("PREFLIGHT OK" in captured.err) or ("PREFLIGHT FAIL" in captured.err)
+
+
+def test_run_empty_status_returns_zero_and_resets_failure_counter(
+    monkeypatch, tmp_path, capsys
+):
+    """No-new-bookmarks path must exit 0 (per CLAUDE.md spec) and mark
+    heartbeat success=True so consecutive_cron_failures resets.
+
+    Regression: pre-fix, headless treated `status="empty"` as a generic
+    failure (return 2 + heartbeat success=False), violating the spec
+    "0 full / 0 no-new / 1 partial / 2 fatal" and producing false-alarm
+    cron-stale banners every time the user had no new X bookmarks since
+    the last sync. Surfaced by 2026-04-29 manual QA Phase D7.
+    """
+    from xsensai.sync import service as _service
+    from xsensai.sync.heartbeat import read_status
+
+    monkeypatch.setenv("XSENSAI_X_REFRESH_TOKEN", "test-rt")
+    monkeypatch.setenv("XSENSAI_X_CLIENT_ID", "test-ci")
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    monkeypatch.setenv("XSENSAI_CORPUS_PATH", str(corpus))
+
+    empty_result = _service.RunResult(
+        run_id="test-empty-run",
+        status="empty",
+        extraction_strategy="none",
+        rendered_message="[INFO/SYNC_DONE] No new bookmarks since last sync.\n"
+                         "Nothing to do.\nSource: sync.service.run(mode=headless)",
+        threads_unfetched_this_run=0,
+        duration_ms=42,
+    )
+
+    finalize_calls = []
+
+    def fake_run(**kwargs):
+        return empty_result
+
+    def fake_finalize_run(**kwargs):
+        finalize_calls.append(kwargs)
+
+    monkeypatch.setattr(_service, "run", fake_run)
+    monkeypatch.setattr(_service, "finalize_run", fake_finalize_run)
+
+    rc = headless.run()
+
+    assert rc == 0, "no-new-bookmarks must exit 0 per CLAUDE.md spec"
+    assert len(finalize_calls) == 1, "finalize_run must run for empty path so heartbeat marks success"
+    fc = finalize_calls[0]
+    assert fc["success"] is True, "empty path must mark heartbeat success=True"
+    assert fc["n_new_cards"] == 0
+    assert fc["extraction_inline"] == 0
+    assert fc["extraction_pending"] == 0
+    assert fc["mode"] == "headless"
+
+    captured = capsys.readouterr()
+    assert "CRON_NO_NEW_BOOKMARKS" in captured.err
+    # The success info must NOT be re-printed as if it were an error.
+    assert "INFO/SYNC_DONE" not in captured.err

@@ -293,9 +293,31 @@ def run(
             log.exception("failed to commit + push auth-failure flag")
         return 2
 
+    if run_result.status == "empty":
+        # No new bookmarks since last sync. Per CLAUDE.md spec:
+        # "Exit codes: 0 full / 0 no-new / 1 partial / 2 fatal".
+        # Treat as success: heartbeat success=True (resets
+        # consecutive_cron_failures), no commit/push, exit 0.
+        _service.finalize_run(
+            run_id=run_result.run_id,
+            success=True,
+            n_new_cards=0,
+            extraction_inline=0,
+            extraction_pending=0,
+            threads_unfetched_this_run=run_result.threads_unfetched_this_run,
+            corpus_path=corpus,
+            duration_ms=run_result.duration_ms,
+            mode="headless",
+            cron_runner=runner,
+        )
+        print(
+            "[INFO/CRON_NO_NEW_BOOKMARKS] cron found no new bookmarks since last run.",
+            file=sys.stderr,
+        )
+        return 0
+
     if run_result.status != "ok":
-        # Generic non-auth failure path (already includes empty fetch +
-        # internal errors via _failed_result). Heartbeat update only —
+        # Generic non-auth failure path. Heartbeat update only —
         # finalize_run skipped because we don't trust the partial state.
         existing = read_status(corpus)
         update_after_run(
