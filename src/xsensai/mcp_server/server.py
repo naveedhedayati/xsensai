@@ -197,7 +197,11 @@ def get_bookmark(id: str) -> Dict[str, Any]:
     a search_bookmarks hit.
 
     RETURNS: {id, source_type, author_or_self, source, source_url, captured,
-    date, tags, pinned, why_saved, applicability, body} — full card detail.
+    date, tags, pinned, why_saved, applicability, body, is_v1} — full card
+    detail. `is_v1` is True for v1-shape cards (no raw_path/raw_checksum) so
+    callers can short-circuit destructive ops with `[V1_MUTATION_BLOCKED]`
+    UX without consuming a confirmation nonce. Slice 7.5 (v0.9.0.0): added
+    `is_v1` field to support `/xdelete`'s id-resolve V1 short-circuit (AE5).
     On not-found returns {"error": {"code": "NO_RESULTS", "message": "..."}}.
     """
     log.info("get_bookmark: id=%r", id)
@@ -222,6 +226,7 @@ def get_bookmark(id: str) -> Dict[str, Any]:
         "why_saved": card.fm.why_saved,
         "applicability": list(card.fm.applicability),
         "body": card.body,
+        "is_v1": _is_v1_card(card),
     }
 
 

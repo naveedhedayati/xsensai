@@ -307,7 +307,8 @@ class NonceStore:
             attempted=f"redeem(op={attempted_op!r}, target={attempted_target!r})",
             next_action=(
                 f"Re-run {attempted_cmd} to issue a fresh code bound to this "
-                "operation and card. "
+                "operation and card. (You may have issued the code via "
+                "/xdelete and tried to redeem on /xrestore, or vice versa.) "
                 "(see TROUBLESHOOTING.md#nonce-operation-mismatch)"
             ),
             retryable=True,
