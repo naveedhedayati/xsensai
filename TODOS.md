@@ -256,9 +256,9 @@ tests. F11 `test_legacy_plus_nonce_prefers_nonce` deleted (no longer
 reachable). 32 `user_confirmed=True` kwargs stripped from `test_tombstone.py`
 delete/restore call sites; `XSENSAI_DESTRUCTIVE_BYPASS=1` autouse fixture
 stays. `annotate_card`/`set_pin` keep `user_confirmed: bool` per ADR-002.
-Cutover gate met: >=7-day soak from v0.8.0.0 + ≥1 successful `/xdelete`
-round-trip with `permissions.ask` active + zero unexpected `NONCE_*`
-clusters in privacy-aware xask log. Plan + /plan-eng-review at
+Cutover gate overridden at `/land-and-deploy` per single-user-product
+carve-out (calendar soak skipped — day 1 of 7; `/xdelete` round-trip +
+`NONCE_*` log check deferred to post-merge). Plan + /plan-eng-review at
 `~/.claude/plans/clever-dazzling-spark.md`.
 
 ### Slice 7.5+: Telemetry-driven AE10 revisit

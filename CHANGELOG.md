@@ -10,9 +10,14 @@ deprecation window from the Slice 7 contract change. Calls to
 `TypeError`. Only `confirmation_nonce=<8-char>` (or
 `XSENSAI_DESTRUCTIVE_BYPASS=1` env-bypass) is accepted.
 
-Cutover gate verified before merge: >=7-day soak from v0.8.0.0 ship +
-≥1 successful `/xdelete` round-trip with `permissions.ask` active +
-zero unexpected `NONCE_*` clusters in the privacy-aware xask log.
+Cutover gate (single-user-product carve-out at `/land-and-deploy`):
+the >=7-day calendar soak from v0.8.0.0 was **overridden** — v0.8.0.0
+shipped 2026-04-28 and v0.9.1.0 shipped 2026-04-29 (day 1 of soak).
+The user-attestation gate (≥1 successful `/xdelete` round-trip with
+`permissions.ask` active + clean `NONCE_*` log) is **deferred to
+post-merge**: restart Claude Code → exercise `/xdelete` on a test card
+to retroactively close the gate. Rollback path: `git revert 7d6c035`
+if `/xdelete` v0.9.0.0 turns out to have a regression.
 
 Versioning note: `0.9.0.0 → 0.9.1.0` is a PATCH bump despite removing a
 public kwarg. Under the project's pre-1.0 (`MAJOR=0`) convention, breaking
