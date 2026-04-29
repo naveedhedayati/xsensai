@@ -68,6 +68,47 @@ echo "Scheduled sync (Slice 5, optional): see docs/CRON_SETUP.md for setup."
 echo "  python -m xsensai.entrypoints.headless --emit-secrets-stdin   # ready-to-paste setup"
 echo "  python -m xsensai.entrypoints.headless --check                # verify env + xdk"
 
+# Slice 7.5 (v0.9.0.0) — wire permissions.ask for destructive MCP tools.
+# Per AD1: announce every config change. Per AE2: malformed JSON is
+# safe-skipped, not fatal. Per TD-ENG-1: target user-global ~/.claude/settings.json.
+echo ""
+echo "Configuring Claude Code permission prompts for destructive tools..."
+# /review F2: do NOT mask helper failures with `|| true`. The helper handles
+# all expected failures (malformed JSON, etc.) by returning 0 with a
+# [SETTINGS_MALFORMED] envelope. Real exceptions (Python crash, write
+# permission denied) should surface so the user knows the gate didn't install.
+if ! python "$REPO_ROOT/scripts/_settings_merge.py" "$HOME/.claude/settings.json"; then
+  echo "WARN: permissions.ask wiring failed unexpectedly. /xdelete and /xrestore"
+  echo "      will still work but Claude Code will NOT prompt for permission per"
+  echo "      call. Inspect ~/.claude/settings.json manually and re-run install"
+  echo "      after fixing. See docs/PERMISSIONS_ASK.md."
+fi
+
+# Slice 7.5 — version-warn if MCP server is older than the slash commands
+# expect. Without this, a user on v0.7 running v0.9.0.0 install gets new
+# xdelete.md calling against an old server returning [USER_CONFIRMATION_REQUIRED]
+# instead of [NONCE_REQUIRED]. AD2 fix: tell them what to do.
+echo ""
+mcp_version=$(python -c "
+try:
+    import xsensai
+    print(getattr(xsensai, '__version__', 'unknown'))
+except Exception:
+    print('unknown')
+" 2>/dev/null)
+case "$mcp_version" in
+  unknown|0.[0-7].*)
+    echo "WARN: xsensai MCP server is version ${mcp_version} but commands target v0.8.0.0+."
+    echo "      /xdelete and /xrestore will return [USER_CONFIRMATION_REQUIRED] envelopes"
+    echo "      until you upgrade the server:"
+    echo "        cd $REPO_ROOT && pip install -e ."
+    echo "      Then restart Claude Code to pick up the new MCP server."
+    ;;
+  *)
+    echo "MCP server version: ${mcp_version} (compatible with shipped commands)."
+    ;;
+esac
+
 # Slice 6 — detect v1 cards and direct user to migration. Prevents the
 # onboarding regression both /autoplan dual voices flagged: "Slice 6
 # shipped but my v1 cards still error on annotate/pin."
