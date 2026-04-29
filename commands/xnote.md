@@ -25,6 +25,14 @@ are also REFUSED with `[TOMBSTONE_BLOCKED]`. The remediation is to restore
 the card via `/xrestore` or re-paste via `/xpaste` — `next_action` in the
 rendered error spells this out. Slice 6.
 
+> **Why `/xnote` uses `user_confirmed=True` (a soft guard) and not the
+> nonce/handshake** that `/xdelete` and `/xrestore` use: annotation is
+> reversible — re-edit `why_saved`, toggle `pinned`, edit the `## Notes`
+> block. Re-run cost is minutes. The nonce/handshake exists for transitions
+> the user can't recover from with a slash command (deletion removes the
+> card from search/list ops; restoration moves state). See ADR-002 in
+> `docs/PERMISSIONS_ASK.md` and the "Guard levels" table in `/xhelp`.
+
 ## Mode dispatch
 
 Ask: "Which card? Paste an id, URL, or keyword — or type `review` (alone

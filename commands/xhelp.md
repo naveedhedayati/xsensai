@@ -26,14 +26,17 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `/xask` | Thinking session, live — corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs. |
 | `/xsync` | Ingest new bookmarks from X via XDK. Smart-default extraction (inline ≤5, deferred >5). |
 | `/xextract` | Backlog drain: bulk-extract `retrieval_summary` + `retrieval_tags` for cards still `extraction_pending: true` (Slice 5 lazy-extract handles top-3 on /xfind, but bulk drain is faster + ensures non-queried cards get extracted). |
-| `/xrestore` | Restore a soft-deleted card. Lists recently-deleted, pick by number, then confirm via the Slice 7 nonce/handshake (server prints an 8-character code, you echo it). To **delete** a card today: ask Claude to call `delete_bookmark(id)` and follow the same nonce flow. A `/xdelete` shortcut ships in Slice 7.5+ once the contract has been live for a release. |
+| `/xrestore` | Restore a soft-deleted card. Lists recently-deleted, pick by number, then confirm via the Slice 7 nonce/handshake (server prints an 8-character code, you echo it). For delete, see `/xdelete`. |
+| `/xdelete` | Soft-delete a card. Search → pick → confirm via nonce/handshake (8-char code). Recoverable via `/xrestore`. (Claude Code asks permission per call — see `docs/PERMISSIONS_ASK.md`.) |
+
+> **Destructive tools (`/xdelete` + `/xrestore`) require `permissions.ask` in
+> `~/.claude/settings.json` — auto-configured by `scripts/install_commands.sh`.**
 
 ### Planned
 
 | Command | Slice | What it will do |
 |---|---|---|
 | `/xtranscribe` | Future | Process queued video transcriptions |
-| `/xdelete` | Slice 7+ | Slash-command shortcut for `delete_bookmark` (currently MCP-only this slice). |
 
 ## MCP tools (callable from any Claude conversation with MCP configured)
 
@@ -57,7 +60,7 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `get_review_cursor()` | Read the /xnote review walk cursor (UC10). |
 | `set_review_cursor(last_card_id?)` | Update or clear the /xnote review walk cursor (UC10). |
 | `xask_capabilities()` | Read-only deploy-status helper for `/xask` (Slice 3). |
-| `delete_bookmark(id, confirmation_nonce?)` | **Slice 7** — soft-delete a card via 2-call nonce/handshake. First call (no nonce) returns `[NONCE_REQUIRED]` with a one-time 8-char code; user echoes; second call redeems. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). Legacy `user_confirmed: bool` accepted for one release with migration message; removed in v0.9. Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the parent shell skips the handshake for scripted maintenance. |
+| `delete_bookmark(id, confirmation_nonce?)` | **Slice 7** — soft-delete a card via 2-call nonce/handshake. First call (no nonce) returns `[NONCE_REQUIRED]` with a one-time 8-char code; user echoes; second call redeems. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). Legacy `user_confirmed: bool` accepted for one release with migration message; **removed in v0.9.1.0** (calls TypeError after that). Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the parent shell skips the handshake for scripted maintenance. |
 | `restore_bookmark(id, confirmation_nonce?)` | **Slice 7** — un-delete a tombstoned card; same 2-call nonce/handshake as `delete_bookmark`. |
 | `list_deleted(limit?)` | **Slice 6** — list recently-deleted cards, newest-first (read-only). |
 

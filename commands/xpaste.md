@@ -12,6 +12,13 @@ X via `/xsync` (Slice 4). The card lands on disk via `paste_bookmark`
 (MCP), which holds the `card_write` lock + writes atomically + flips an
 `_index-dirty` marker that `/xfind` consumes on the next query.
 
+> **Why `/xpaste` uses `user_confirmed=True` (a soft guard) and not the
+> nonce/handshake** that `/xdelete` and `/xrestore` use: paste creates
+> rather than destroys, and the result is fully editable + deletable. The
+> nonce/handshake exists for destructive transitions where the user
+> can't recover with a slash command. See ADR-002 in
+> `docs/PERMISSIONS_ASK.md` and the "Guard levels" table in `/xhelp`.
+
 ## Two modes
 
 If the user's first input is the literal token `recover` (alone on a line,
