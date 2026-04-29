@@ -7,6 +7,12 @@ the user's vault.
 Prerequisites: Slice 7 merged (v0.8.0.0) and the MCP server restarted.
 Pick one v2 paste card you don't mind cycling through delete/restore.
 
+> **Heads up for v0.9.1.0+ runs:** step **G6** (legacy `user_confirmed=True` →
+> `[NONCE_REQUIRED]` with deprecation text) is **superseded** by the v0.9.1.0
+> shim removal. Against a current MCP server, calling
+> `delete_bookmark(id, user_confirmed=True)` raises `TypeError` instead.
+> The other steps (G1–G5, G7–G9) still capture the v0.8.0.0+ behavior.
+
 ---
 
 ## G1 — Happy path delete via the 2-call flow

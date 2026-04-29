@@ -109,9 +109,9 @@ If error: show `rendered_message` verbatim. Common envelopes:
   `deleted` flag and `deleted_at` timestamp are cleared.
 - After restore, the card is back in `search_bookmarks` results and
   `list_pinned` if it was pinned before deletion.
-- DO NOT pass `user_confirmed=True` — that's the deprecated Slice 6 kwarg.
-  If you supply it, the server returns a `[NONCE_REQUIRED]` envelope
-  pointing at this flow as a one-release migration aid.
+- The `user_confirmed: bool` kwarg from Slice 6 was removed in v0.9.1.0.
+  Calls that still pass it raise `TypeError`. Use the 2-call nonce flow
+  above.
 - If the first call returns `[USER_CONFIRMATION_REQUIRED]` instead of
   `[NONCE_REQUIRED]`, the MCP server is running pre-Slice-7 code; ask
   the user to restart Claude Code to pick up the new server.

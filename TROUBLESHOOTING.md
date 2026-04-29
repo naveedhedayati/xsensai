@@ -722,9 +722,29 @@ The first half of the 2-call destructive flow. Returned when
 8-character code. The host displays it verbatim and asks the user to
 echo it.
 
-Also returned when the deprecated Slice 6 `user_confirmed: bool`
-kwarg is supplied — one-release migration aid, removed in v0.9.1.0
-(calls with that kwarg `TypeError` after that release).
+The legacy Slice 6 `user_confirmed: bool` kwarg was removed in v0.9.1.0.
+Calls that still pass it raise `TypeError` rather than being shimmed
+into this envelope. See "Stale tools/list schema after v0.9.1.0 upgrade"
+below if you see a JSON-RPC validation error mentioning `user_confirmed`.
+
+### Stale tools/list schema after v0.9.1.0 upgrade
+
+**Symptom**: After upgrading the MCP server to v0.9.1.0+, calling
+`delete_bookmark` or `restore_bookmark` returns a JSON-RPC validation
+error (-32602 *invalid params* or -32603 *internal error*) mentioning
+`user_confirmed`. Unlike `[NONCE_REQUIRED]`, this error is NOT a
+structured `[CODE] / cause / attempted / next_action / retryable`
+envelope — it's a raw FastMCP / JSON-RPC failure.
+
+**Cause**: Your Claude Code session is running a cached `tools/list`
+schema from before the kwarg removal. The host LLM still believes
+`user_confirmed: bool` is a valid argument and sends it; the v0.9.1.0+
+server rejects the unknown property.
+
+**Fix**: Restart Claude Code. The MCP `tools/list` response is
+re-fetched on session start, picks up the new signature, and subsequent
+calls go through the 2-call nonce flow (or `XSENSAI_DESTRUCTIVE_BYPASS=1`
+if set) cleanly.
 
 ### NONCE_INVALID
 

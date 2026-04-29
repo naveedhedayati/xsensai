@@ -199,4 +199,4 @@ The latter two are new in Slice 7.5.
 - The `permissions.ask` modal is the **cryptographic gate**. The in-band nonce is the **user-attestation gate**. Both stack. See `docs/PERMISSIONS_ASK.md`.
 - "Always allow" defeats the cryptographic gate permanently. Don't click it unless you understand the trade-off.
 - The 90-second window in the success message refers to the card being LISTED FIRST in `/xrestore`'s `list_deleted` output for ~90s after deletion (so an immediate undo finds it at #1). The card itself is recoverable indefinitely until the file is manually deleted from the corpus.
-- Slice 7 G6 (legacy `user_confirmed=True` returns `[NONCE_REQUIRED]` with deprecation text) STILL APPLIES in v0.9.0.0 (the shim is one-release). v0.9.1.0 will TypeError on that kwarg.
+- Slice 7 G6 (legacy `user_confirmed=True` returns `[NONCE_REQUIRED]` with deprecation text) APPLIED in v0.9.0.0 only — the shim was one-release. v0.9.1.0+ raises `TypeError` on that kwarg; running G6 against a current MCP server will now hit the TypeError path, not the deprecation envelope.
