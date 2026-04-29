@@ -2,6 +2,100 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.0.0] - 2026-04-29
+
+Slice 7.5 — `/xdelete` slash command + `.claude/settings.json` `permissions.ask`
+auto-installed by `scripts/install_commands.sh`. Closes the Slice 7
+honest-framing gap: the cryptographic gate (Claude Code's per-tool permission
+prompt) is now the real user-attestation boundary, with the in-band
+8-character nonce handshake stacked on top. Plan + dual-voice review at
+`~/.claude/plans/deep-meandering-waffle.md`. CEO + Eng + DX phases ran with
+both Codex and Claude subagent voices; 6/6 CEO + 4/6 Eng + 5/6 DX dimensions
+DISAGREE'd, drove the original single-PR plan to a v0.9.0.0 + v0.9.1.0 split.
+
+> **Heads up — v0.9.1.0 will remove the `user_confirmed: bool` shim from
+> `delete_bookmark`/`restore_bookmark`.** Calls with `user_confirmed=True`
+> after v0.9.1.0 ships will `TypeError`. The shim has been a one-release
+> migration aid since v0.8.0.0; it's gated on >=7 day soak + at least one
+> successful /xdelete round-trip with permissions.ask active + zero
+> unexpected `NONCE_*` clusters before v0.9.1.0 opens.
+
+### Added
+
+- **`/xdelete` slash command** ([commands/xdelete.md](commands/xdelete.md)) —
+  search → pick (id / URL / keyword) → 2-call nonce handshake → redeem.
+  Mirrors `/xrestore`'s nonce flow + `/xnote`'s single-mode card resolution.
+  Single-mode only by design (ADR-001 — no batch mode; per-id attestation
+  invariant).
+- **`scripts/_settings_merge.py`** — Python helper (stdlib `json` only) that
+  merges `permissions.ask` entries into the user-global
+  `~/.claude/settings.json`. Idempotent; backs up `{path}.bak.{ts}` on every
+  real change; safe-skips on malformed JSON; warns on
+  `[PERMISSIONS_WILDCARD_OVERRIDE]` when pre-existing `permissions.allow`
+  wildcards subsume the gate.
+- **`scripts/install_commands.sh`** extensions — invokes the settings-merge
+  helper; announces every config change (no silent mutation); detects MCP
+  server version and warns when `< 0.8` ("commands target v0.8.0.0+; run
+  `pip install -e .` and restart Claude Code").
+- **`docs/PERMISSIONS_ASK.md`** — 5-section reference: what `permissions.ask`
+  does, why xsensai uses it for delete/restore, precedence caveats
+  (`permissions.allow` supersedes `permissions.ask`), three options when the
+  modal fires (Allow once / Allow for this session / Always allow with the
+  "Always allow" trap warning), file-scope decision (user-global per
+  TD-ENG-1). Plus ADR-001 (single-mode `/xdelete`) and ADR-002 (Slice 2
+  guards stay `user_confirmed: bool` because annotate/pin/paste are
+  reversible).
+- **`tests/test_install_commands.py`** (+17 tests) — pytest + subprocess
+  against tmp HOME covering empty/missing file, existing-keys preservation,
+  idempotency, malformed-JSON safe-skip, wildcard-override detection (literal
+  + suffix wildcard), backup behavior.
+- **`tests/manual/SLICE_7_5_GAUNTLET.md`** — manual gauntlet for /xdelete
+  happy path + nonce error envelopes + permissions.ask modal observation +
+  wildcard-override warning + MCP-server-version-mismatch warning.
+
+### Changed
+
+- **`commands/xhelp.md`**: `/xdelete` moved from Planned → Available now;
+  added "Destructive tools require permissions.ask (auto-configured by
+  installer)" note near the command/tool tables. Tool-table entry for
+  `delete_bookmark` updated to reference v0.9.1.0 cutover for the
+  `user_confirmed` shim.
+- **`commands/xrestore.md`**: dropped the "no /xdelete slash command yet"
+  forward-reference (lines 13-15). The `user_confirmed=True` warning
+  ("DO NOT pass...") is unchanged because the shim is still alive in
+  v0.9.0.0.
+- **`commands/xnote.md`, `commands/xpin.md`, `commands/xpaste.md`**: each
+  gets a one-paragraph ADR-002 callout at the point of use explaining why
+  the soft `user_confirmed: bool` guard stays (annotate/pin/paste are
+  reversible; nonce handshake is for transitions you can't recover with a
+  slash command).
+- **`src/xsensai/mcp_server/nonce_store.py`** `_err_operation_mismatch`:
+  `next_action` now explicitly references delete-vs-restore. *"Re-run {cmd}
+  to issue a fresh code bound to this operation and card. (You may have
+  issued the code via /xdelete and tried to redeem on /xrestore, or vice
+  versa.)"*
+- **`tests/test_destructive_token_flow.py`** `TestAtomicMarkdownGate`:
+  extended to scan `commands/xdelete.md` in addition to `commands/xrestore.md`.
+  Closes the v0.9.0.0 → v0.9.1.0 coexistence-window regression hole (a stale
+  /xdelete instruction with `user_confirmed=True` would otherwise pass tests
+  silently).
+- **`TROUBLESHOOTING.md`**: 4 new entries — `[SETTINGS_MALFORMED]`,
+  `[PERMISSIONS_WILDCARD_OVERRIDE]`, "Permissions modal not appearing",
+  "MCP server version mismatch (returns [USER_CONFIRMATION_REQUIRED])".
+  Updated the Slice 7 honest-framing section to point at the auto-installed
+  gate and `docs/PERMISSIONS_ASK.md`.
+- **`CLAUDE.md`**: added Slice 7.5 build-sequence entry + "Slice 7.5 — what
+  works" section.
+- **`VERSION`**: bumped to `0.9.0.0`.
+
+### Auto-decisions logged at /autoplan
+
+21 auto-decisions logged in the plan's Decision Audit Trail (10 from Eng
+phase: AE1-AE10; 11 from DX phase: AD1-AD11). Two taste decisions resolved at
+the final gate: TD-ENG-1 (settings.json scope → user-global) and TD-ENG-2
+(picker injection defense → light Notes-for-Claude warning + plain-text
+rendering, with user-attestation as the backstop).
+
 ## [0.8.0.0] - 2026-04-28
 
 Slice 7 — confirmation nonce/handshake on destructive MCP tools. Closes

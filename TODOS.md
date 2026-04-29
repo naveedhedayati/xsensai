@@ -211,21 +211,32 @@ var for scripted maintenance. /xdelete slash command deferred to Slice
 7.5/8 (see below). Plan + dual-voice review at
 `~/.claude/plans/vigilant-handshaking-magpie.md`.
 
-### Slice 7.5+: `/xdelete` slash command
+### ~~Slice 7.5+: `/xdelete` slash command~~ — CLOSED
 
-**Priority:** P3 (after Slice 7 nonce contract has been in production for
-a release).
-**Origin:** Slice 7 /autoplan + /review convergent recommendation. Both
-CEO voices and the eng subagent flagged shipping /xdelete in the same
-release as the destructive-contract change as scope contamination. Slice
-7 ships the contract; Slice 7.5 ships the UX.
-**Description:** Add `commands/xdelete.md` mirroring the updated
-`commands/xrestore.md` 2-call flow: search → pick → call
-`delete_bookmark(id)` → display `<<<NONCE: ABCD-EFGH>>>` block verbatim
-→ user echoes → call `delete_bookmark(id, confirmation_nonce=<echoed>)`.
-Update `commands/xhelp.md` to remove the "MCP-only" caveat once shipped.
-**Files:** [commands/xdelete.md](commands/xdelete.md) (new),
-[commands/xhelp.md](commands/xhelp.md).
+**Status:** Done in Slice 7.5 (v0.9.0.0). `commands/xdelete.md` ships
+mirroring `commands/xrestore.md`'s 2-call nonce flow + `commands/xnote.md`'s
+single-mode card resolution. Single-mode only by design (ADR-001 — per-id
+attestation invariant; batch mode would nonce-habituate the user).
+`commands/xhelp.md` Planned table entry removed; /xdelete is in Available
+now with the permissions.ask integration line. Plan + dual-voice review at
+`~/.claude/plans/deep-meandering-waffle.md`. **Completed:** v0.9.0.0
+(2026-04-29).
+
+### Slice 7.5+: `.claude/settings.json` permissions.ask auto-installer (NEW, also closed in v0.9.0.0)
+
+**Status:** Done in Slice 7.5 (v0.9.0.0). New `scripts/_settings_merge.py`
+helper invoked by `scripts/install_commands.sh` writes the
+`mcp__xsensai__delete_bookmark` and `mcp__xsensai__restore_bookmark`
+entries into the user-global `~/.claude/settings.json` `permissions.ask`
+array. Idempotent; backs up `{path}.bak.{ts}` (chmod 0600, 3-most-recent
+retention) on every real change; safe-skips on malformed JSON; warns on
+`[PERMISSIONS_WILDCARD_OVERRIDE]` when pre-existing `permissions.allow`
+wildcards subsume the gate; uses `fcntl.flock` + atomic `os.replace` for
+crash-safe concurrent installs. Closes Slice 7's honest-framing gap: the
+cryptographic gate (Claude Code's per-tool permission prompt) is now the
+real user-attestation boundary, with the in-band 8-character nonce
+handshake stacked on top. Spec at `docs/PERMISSIONS_ASK.md`.
+**Completed:** v0.9.0.0 (2026-04-29).
 
 ### Slice 7.5+: Remove legacy `user_confirmed` shim from delete/restore
 
