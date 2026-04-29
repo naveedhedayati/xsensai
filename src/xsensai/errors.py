@@ -85,6 +85,12 @@ ErrorCode = Literal[
     "SETUP_GH_AUTH_REQUIRED",
     "SETUP_DEPLOY_KEY_REJECTED",
     "SETUP_FIRST_RUN_FAILED",
+    # Slice 7 — confirmation nonce/handshake for destructive MCP tools
+    "NONCE_REQUIRED",
+    "NONCE_INVALID",
+    "NONCE_EXPIRED",
+    "NONCE_OPERATION_MISMATCH",
+    "NONCE_ALREADY_REDEEMED",
     # MCP / runtime
     "INTERNAL_ERROR",
 ]
