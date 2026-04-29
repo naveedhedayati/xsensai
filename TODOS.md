@@ -111,6 +111,13 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 **Description:** Watch the nightly job for 2-3 weeks. If green, move the integration tests to the default CI lane.
 **Files:** [.github/workflows/ci.yml](.github/workflows/ci.yml)
 
+### Unify `VERSION` and `pyproject.toml` as single source of truth
+
+**Priority:** P3
+**Origin:** Slice 7.5 /review F7 (caught `pyproject.toml` stale at 0.7.0.0 — pre-existing drift since Slice 7) + /plan-eng-review on v0.9.1.0 (caught it would drift again every release without a structural fix).
+**Description:** `pyproject.toml` currently hardcodes `version = "..."` independently from the `VERSION` file. Each release someone has to remember to bump both. Standard fix: `pyproject.toml` reads version dynamically — `dynamic = ["version"]` + `[tool.setuptools.dynamic] version = {file = "VERSION"}` is the simpler change (no new build-time dep). Add 1 doc-consistency test asserting the two stay in sync. ~1 hr work.
+**Files:** [pyproject.toml](pyproject.toml), [VERSION](VERSION), [tests/test_doc_consistency.py](tests/test_doc_consistency.py)
+
 ---
 
 ## Completed
@@ -238,19 +245,21 @@ real user-attestation boundary, with the in-band 8-character nonce
 handshake stacked on top. Spec at `docs/PERMISSIONS_ASK.md`.
 **Completed:** v0.9.0.0 (2026-04-29).
 
-### Slice 7.5+: Remove legacy `user_confirmed` shim from delete/restore
+### ~~Slice 7.5+: Remove legacy `user_confirmed` shim from delete/restore~~ — CLOSED
 
-**Priority:** P3 (one release after Slice 7 ships, gated on telemetry).
-**Origin:** Slice 7 plan AD5 — the legacy `user_confirmed` kwarg shim
-on `delete_bookmark` and `restore_bookmark` is intentionally one-release.
-Removed in v0.9 once any stale Claude Code sessions have refreshed.
-**Description:** Drop the `user_confirmed: Optional[bool] = None` kwarg
-from both signatures. Update tests (currently use `XSENSAI_DESTRUCTIVE_BYPASS=1`
-autouse fixture, but keep that for non-handshake test paths). Verify no
-remaining call sites grep `user_confirmed.*delete_bookmark|restore_bookmark`.
-**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py),
-[tests/test_tombstone.py](tests/test_tombstone.py),
-[tests/test_destructive_token_flow.py](tests/test_destructive_token_flow.py).
+**Status:** Done in Slice 7.5.1 (v0.9.1.0). `user_confirmed: Optional[bool]`
+parameter dropped from `delete_bookmark` and `restore_bookmark` signatures.
+The legacy-kwarg branches in both functions and the `legacy: bool` parameter
+on `_nonce_required_envelope` removed. `TestLegacyKwargShim` flipped to
+`TestLegacyKwargRemoved` with 3 `pytest.raises(TypeError, match="user_confirmed")`
+tests. F11 `test_legacy_plus_nonce_prefers_nonce` deleted (no longer
+reachable). 32 `user_confirmed=True` kwargs stripped from `test_tombstone.py`
+delete/restore call sites; `XSENSAI_DESTRUCTIVE_BYPASS=1` autouse fixture
+stays. `annotate_card`/`set_pin` keep `user_confirmed: bool` per ADR-002.
+Cutover gate met: >=7-day soak from v0.8.0.0 + ≥1 successful `/xdelete`
+round-trip with `permissions.ask` active + zero unexpected `NONCE_*`
+clusters in privacy-aware xask log. Plan + /plan-eng-review at
+`~/.claude/plans/clever-dazzling-spark.md`.
 
 ### Slice 7.5+: Telemetry-driven AE10 revisit
 

@@ -2,6 +2,78 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.1.0] - 2026-04-29
+
+Slice 7.5.1 — `user_confirmed` shim removal. Closes the v0.8.0.0 → v0.9.0.0
+deprecation window from the Slice 7 contract change. Calls to
+`delete_bookmark` or `restore_bookmark` with `user_confirmed=` now raise
+`TypeError`. Only `confirmation_nonce=<8-char>` (or
+`XSENSAI_DESTRUCTIVE_BYPASS=1` env-bypass) is accepted.
+
+Cutover gate verified before merge: >=7-day soak from v0.8.0.0 ship +
+≥1 successful `/xdelete` round-trip with `permissions.ask` active +
+zero unexpected `NONCE_*` clusters in the privacy-aware xask log.
+
+Versioning note: `0.9.0.0 → 0.9.1.0` is a PATCH bump despite removing a
+public kwarg. Under the project's pre-1.0 (`MAJOR=0`) convention, breaking
+changes are signaled by the explicit forward-warning in the predecessor
+release's CHANGELOG entry (see v0.8.0.0 and v0.9.0.0 above), not by a
+MAJOR/MINOR tier change.
+
+### Removed
+
+- **`user_confirmed: Optional[bool]` parameter** dropped from
+  `delete_bookmark` and `restore_bookmark` signatures
+  ([src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py)).
+- **Legacy `elif user_confirmed is not None:` branches** in both functions —
+  the one-release migration path that re-issued `[NONCE_REQUIRED]` with
+  deprecation text. Stale callers now hit a naked `TypeError`.
+- **`legacy: bool = False` parameter** removed from
+  `_nonce_required_envelope` helper. Helper now has one cause-text path.
+- **`tests/test_destructive_token_flow.py::TestLegacyKwargShim`** class
+  replaced with `TestLegacyKwargRemoved` (3 tests assert
+  `pytest.raises(TypeError, match="user_confirmed")` instead of
+  asserting the old NONCE_REQUIRED migration envelope).
+- **`tests/test_destructive_token_flow.py::test_legacy_plus_nonce_prefers_nonce`**
+  (F11 fix from Slice 7) deleted — the F11 concern about mid-migration
+  callers passing both `user_confirmed=True` and a valid `confirmation_nonce`
+  is no longer reachable without the shim.
+
+### Changed
+
+- **`tests/test_tombstone.py`** — 32 `user_confirmed=True` kwargs stripped
+  from `delete_bookmark` and `restore_bookmark` calls. The autouse
+  `_destructive_bypass` fixture (`XSENSAI_DESTRUCTIVE_BYPASS=1`) stays;
+  the kwargs were redundant once the bypass was set. `annotate_card` and
+  `set_pin` calls in the same file keep `user_confirmed: bool` per
+  ADR-002 (reversible mutations don't need the nonce ceremony).
+- **`tests/test_tombstone.py::test_delete_requires_nonce_when_bypass_off`
+  + `::test_restore_requires_nonce_when_bypass_off`** — drop the
+  legacy-shim assertion sub-block; first-call NONCE_REQUIRED check stays.
+  TypeError coverage moved to `TestLegacyKwargRemoved`.
+- **`commands/xdelete.md`, `commands/xrestore.md`** — "DO NOT pass
+  `user_confirmed=True`" warnings removed. The kwarg no longer exists;
+  the warning was noise.
+- **`TROUBLESHOOTING.md`** — `[NONCE_REQUIRED]` entry's
+  "Also returned when the deprecated Slice 6 `user_confirmed: bool`
+  kwarg is supplied" sub-bullet removed.
+
+### Added
+
+- **`tests/test_doc_consistency.py::test_changelog_has_v0_9_1_0_entry`** —
+  follows the Slice 7.5 backfill pattern (per-version entry-existence
+  test) and asserts the v0.9.1.0 section text mentions `user_confirmed`,
+  catching a future copy-paste regression that drops the kwarg-removal
+  context.
+
+### Migration note
+
+Any holdout caller still passing `user_confirmed=True` will see
+`TypeError: delete_bookmark() got an unexpected keyword argument
+'user_confirmed'`. Use `/xdelete` or `/xrestore` slash commands (which
+already drive the 2-call nonce flow), or call the MCP tool directly
+without the kwarg and follow the `[NONCE_REQUIRED]` envelope.
+
 ## [0.9.0.0] - 2026-04-29
 
 Slice 7.5 — `/xdelete` slash command + `.claude/settings.json` `permissions.ask`

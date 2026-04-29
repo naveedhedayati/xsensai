@@ -1007,15 +1007,11 @@ def _is_v1_card(card: LoadedCard) -> bool:
 
 
 def _nonce_required_envelope(
-    operation: DestructiveOperation, target_id: str, *, legacy: bool = False
+    operation: DestructiveOperation, target_id: str
 ) -> Dict[str, Any]:
     """[NONCE_REQUIRED] envelope: the first half of the 2-call destructive
     flow. Issues a fresh nonce, embeds the formatted code in
     `rendered_message` between `<<<NONCE: ` and `>>>` markers per AD2.
-
-    `legacy=True` is set when the caller passed the deprecated
-    `user_confirmed: bool` kwarg from Slice 6. The cause text gets
-    migration-specific phrasing; the nonce flow is identical.
     """
     issued = nonce_store.issue_nonce(operation=operation, target_id=target_id)
     cmd = "/xdelete" if operation == "delete" else "/xrestore"
@@ -1023,12 +1019,6 @@ def _nonce_required_envelope(
         f"{operation.title()} of {target_id!r} requires a one-time confirmation "
         f"code. Issued: {issued.display_nonce}"
     )
-    if legacy:
-        cause = (
-            f"`user_confirmed: bool` is deprecated in Slice 7. "
-            f"{operation.title()} of {target_id!r} now uses a confirmation "
-            f"handshake. New code issued: {issued.display_nonce}"
-        )
     rendered = (
         f"To confirm {operation} of {target_id!r}, type the 8 characters "
         f"between the markers below "
@@ -1070,7 +1060,6 @@ def _nonce_required_envelope(
 def delete_bookmark(
     id: str,
     confirmation_nonce: Optional[str] = None,
-    user_confirmed: Optional[bool] = None,  # AD5 — one-release legacy shim
 ) -> Dict[str, Any]:
     """Soft-delete a card via the Slice 7 confirmation-nonce handshake.
 
@@ -1088,9 +1077,6 @@ def delete_bookmark(
          nonce, regardless of subsequent op outcome (lock contention,
          v1 refusal, no-op all consume).
 
-    Slice 6 `user_confirmed: bool` is deprecated. If supplied, returns
-    `[NONCE_REQUIRED]` with migration text — one-release shim, removed in v0.9.
-
     Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the MCP server's parent
     process skips the handshake (for scripted maintenance only). Loud
     audit-log marker emitted on bypass.
@@ -1102,10 +1088,9 @@ def delete_bookmark(
     """
     bypass_active = nonce_store.destructive_bypass_enabled()
     log.info(
-        "delete_bookmark: id=%r nonce_present=%s legacy_kwarg=%s bypass=%s",
+        "delete_bookmark: id=%r nonce_present=%s bypass=%s",
         id,
         confirmation_nonce is not None,
-        user_confirmed is not None,
         bypass_active,
     )
 
@@ -1124,26 +1109,18 @@ def delete_bookmark(
             "skipping nonce handshake for id=%r",
             id,
         )
+    elif confirmation_nonce is not None:
+        try:
+            nonce_store.redeem_nonce(
+                nonce=confirmation_nonce,
+                operation="delete",
+                target_id=id,
+            )
+        except XSensaiError as e:
+            return _write_error_response(e)
     else:
-        # F11 fix: if BOTH legacy `user_confirmed` AND a nonce are
-        # supplied, prefer the new flow (the user is mid-migration and
-        # already has a code) rather than discarding the nonce silently.
-        if confirmation_nonce is not None:
-            try:
-                nonce_store.redeem_nonce(
-                    nonce=confirmation_nonce,
-                    operation="delete",
-                    target_id=id,
-                )
-            except XSensaiError as e:
-                return _write_error_response(e)
-        elif user_confirmed is not None:
-            # Legacy kwarg without a nonce: one-release migration shim
-            # that issues a fresh nonce and explains the migration.
-            return _nonce_required_envelope("delete", id, legacy=True)
-        else:
-            # First-call challenge: no nonce supplied, no legacy kwarg.
-            return _nonce_required_envelope("delete", id)
+        # First-call challenge: no nonce supplied.
+        return _nonce_required_envelope("delete", id)
 
     # Lock-first-then-load (Slice 6 invariant retained): acquire the
     # card_write lock BEFORE loading. Otherwise concurrent annotate/pin
@@ -1197,7 +1174,6 @@ def delete_bookmark(
 def restore_bookmark(
     id: str,
     confirmation_nonce: Optional[str] = None,
-    user_confirmed: Optional[bool] = None,  # AD5 — one-release legacy shim
 ) -> Dict[str, Any]:
     """Restore a previously soft-deleted card via the Slice 7
     confirmation-nonce handshake. Sets `deleted: false` and clears
@@ -1207,15 +1183,12 @@ def restore_bookmark(
 
     Returns `already_active: True` if the card is already non-deleted
     (still consumes the nonce per AE10's single-rule contract).
-
-    Slice 6 `user_confirmed: bool` is deprecated; same shim behavior.
     """
     bypass_active = nonce_store.destructive_bypass_enabled()
     log.info(
-        "restore_bookmark: id=%r nonce_present=%s legacy_kwarg=%s bypass=%s",
+        "restore_bookmark: id=%r nonce_present=%s bypass=%s",
         id,
         confirmation_nonce is not None,
-        user_confirmed is not None,
         bypass_active,
     )
 
@@ -1230,21 +1203,17 @@ def restore_bookmark(
             "skipping nonce handshake for id=%r",
             id,
         )
+    elif confirmation_nonce is not None:
+        try:
+            nonce_store.redeem_nonce(
+                nonce=confirmation_nonce,
+                operation="restore",
+                target_id=id,
+            )
+        except XSensaiError as e:
+            return _write_error_response(e)
     else:
-        # F11 fix mirror: prefer nonce when both kwargs are supplied.
-        if confirmation_nonce is not None:
-            try:
-                nonce_store.redeem_nonce(
-                    nonce=confirmation_nonce,
-                    operation="restore",
-                    target_id=id,
-                )
-            except XSensaiError as e:
-                return _write_error_response(e)
-        elif user_confirmed is not None:
-            return _nonce_required_envelope("restore", id, legacy=True)
-        else:
-            return _nonce_required_envelope("restore", id)
+        return _nonce_required_envelope("restore", id)
 
     try:
         corpus_path = corpus.resolve_corpus_path()

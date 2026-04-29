@@ -13,9 +13,10 @@ Slice 7 update: delete_bookmark/restore_bookmark switched to a 2-call
 nonce/handshake. The bulk of these tests aren't testing the handshake
 itself — they're testing tombstone semantics on the corpus side. The
 autouse `_destructive_bypass` fixture enables `XSENSAI_DESTRUCTIVE_BYPASS=1`
-for this file so existing `user_confirmed=True` calls remain valid
-through the AD7 bypass path. Tests that specifically cover the new
-handshake semantics live in `tests/test_destructive_token_flow.py`.
+for this file so destructive calls skip the handshake (AD7 bypass path).
+Tests that specifically cover the handshake semantics — including the
+v0.9.1.0 TypeError on the removed `user_confirmed` kwarg — live in
+`tests/test_destructive_token_flow.py`.
 """
 
 from __future__ import annotations
@@ -37,8 +38,9 @@ from xsensai.sync import dedup
 
 @pytest.fixture(autouse=True)
 def _destructive_bypass(monkeypatch):
-    """Slice 7: enable the documented test-fixture bypass so existing
-    user_confirmed=True call sites continue to work. The handshake itself
+    """Enable the documented test-fixture bypass so destructive
+    delete_bookmark/restore_bookmark calls skip the nonce handshake.
+    Tombstone semantics are what's under test here; the handshake itself
     is exercised in test_destructive_token_flow.py.
     """
     monkeypatch.setenv("XSENSAI_DESTRUCTIVE_BYPASS", "1")
@@ -197,26 +199,21 @@ def _make_v2_bookmark(
 
 class TestDeleteBookmark:
     def test_delete_requires_nonce_when_bypass_off(self, vault_corpus, monkeypatch):
-        """Slice 7: delete_bookmark requires a confirmation_nonce in the
-        2-call flow when the bypass env var is not set. The Slice 6
-        `user_confirmed: bool` shim returns the same NONCE_REQUIRED
-        envelope (one-release migration aid).
+        """delete_bookmark requires a confirmation_nonce in the 2-call
+        flow when the bypass env var is not set. The legacy
+        `user_confirmed` kwarg was removed in v0.9.1.0 (TypeError now);
+        that path is tested in test_destructive_token_flow.py.
         """
         monkeypatch.delenv("XSENSAI_DESTRUCTIVE_BYPASS", raising=False)
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        # No nonce, no kwarg → first-call challenge
+        # No nonce → first-call challenge
         result = server.delete_bookmark(id=target_id)
         assert result["ok"] is False
         assert result["error"]["code"] == "NONCE_REQUIRED"
-        # Legacy shim: user_confirmed=True/False both route to the same
-        # NONCE_REQUIRED migration response
-        result2 = server.delete_bookmark(id=target_id, user_confirmed=True)
-        assert result2["error"]["code"] == "NONCE_REQUIRED"
-        assert "deprecated" in result2["error"]["message"].lower()
 
     def test_delete_marks_card(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        result = server.delete_bookmark(id=target_id, user_confirmed=True)
+        result = server.delete_bookmark(id=target_id)
         assert result["ok"] is True
         assert result["deleted"] is True
         assert result["deleted_at"] is not None
@@ -227,13 +224,13 @@ class TestDeleteBookmark:
 
     def test_double_delete_is_noop(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target_id, user_confirmed=True)
-        result = server.delete_bookmark(id=target_id, user_confirmed=True)
+        server.delete_bookmark(id=target_id)
+        result = server.delete_bookmark(id=target_id)
         assert result.get("already_deleted") is True
 
     def test_delete_excludes_card_from_default_load(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target_id, user_confirmed=True)
+        server.delete_bookmark(id=target_id)
         with pytest.raises(XSensaiError) as exc_info:
             corpus.load_card_by_id(target_id)
         assert exc_info.value.code == "NO_RESULTS"
@@ -252,15 +249,15 @@ class TestDeleteBookmark:
             "x_extraction_status: success\n"
             "---\n\n## Content\n\nold v1\n"
         )
-        result = server.delete_bookmark(id="v1-card", user_confirmed=True)
+        result = server.delete_bookmark(id="v1-card")
         assert "V1_MUTATION_BLOCKED" in str(result)
 
 
 class TestRestoreBookmark:
     def test_restore_clears_tombstone(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target_id, user_confirmed=True)
-        result = server.restore_bookmark(id=target_id, user_confirmed=True)
+        server.delete_bookmark(id=target_id)
+        result = server.restore_bookmark(id=target_id)
         assert result["ok"] is True
         assert result["restored"] is True
         # Re-load and verify on-disk
@@ -270,22 +267,19 @@ class TestRestoreBookmark:
 
     def test_restore_already_active(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        result = server.restore_bookmark(id=target_id, user_confirmed=True)
+        result = server.restore_bookmark(id=target_id)
         assert result.get("already_active") is True
 
     def test_restore_requires_nonce_when_bypass_off(self, vault_corpus, monkeypatch):
-        """Slice 7 mirror of test_delete_requires_nonce_when_bypass_off."""
+        """Mirror of test_delete_requires_nonce_when_bypass_off."""
         target_id = _make_v2_paste(vault_corpus, "alpha")
         # Set up a deleted card (bypass active here)
-        server.delete_bookmark(id=target_id, user_confirmed=True)
-        # Now drop bypass and assert the new handshake gates restore
+        server.delete_bookmark(id=target_id)
+        # Now drop bypass and assert the handshake gates restore
         monkeypatch.delenv("XSENSAI_DESTRUCTIVE_BYPASS", raising=False)
         result = server.restore_bookmark(id=target_id)
         assert result["ok"] is False
         assert result["error"]["code"] == "NONCE_REQUIRED"
-        result2 = server.restore_bookmark(id=target_id, user_confirmed=True)
-        assert result2["error"]["code"] == "NONCE_REQUIRED"
-        assert "deprecated" in result2["error"]["message"].lower()
 
 
 class TestListDeleted:
@@ -298,8 +292,8 @@ class TestListDeleted:
         a = _make_v2_paste(vault_corpus, "alpha")
         b = _make_v2_paste(vault_corpus, "beta")
         c = _make_v2_paste(vault_corpus, "gamma")
-        server.delete_bookmark(id=a, user_confirmed=True)
-        server.delete_bookmark(id=c, user_confirmed=True)
+        server.delete_bookmark(id=a)
+        server.delete_bookmark(id=c)
         result = server.list_deleted()
         assert result["count"] == 2
         ids = [row["id"] for row in result["deleted"]]
@@ -316,7 +310,7 @@ class TestListDeleted:
 class TestTombstoneMutationGuard:
     def test_annotate_on_deleted_blocked(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target_id, user_confirmed=True)
+        server.delete_bookmark(id=target_id)
         result = server.annotate_card(
             id=target_id, why_saved="changed mind", user_confirmed=True
         )
@@ -328,7 +322,7 @@ class TestTombstoneMutationGuard:
 
     def test_set_pin_on_deleted_blocked(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target_id, user_confirmed=True)
+        server.delete_bookmark(id=target_id)
         result = server.set_pin(id=target_id, pinned=True, user_confirmed=True)
         rendered = str(result)
         assert "TOMBSTONE_BLOCKED" in rendered
@@ -344,7 +338,7 @@ class TestCorpusIteration:
     def test_iter_cards_excludes_deleted_default(self, vault_corpus):
         a = _make_v2_paste(vault_corpus, "alpha")
         b = _make_v2_paste(vault_corpus, "beta")
-        server.delete_bookmark(id=a, user_confirmed=True)
+        server.delete_bookmark(id=a)
         ids = [c.id for c in corpus.iter_cards()]
         assert b in ids
         assert a not in ids
@@ -352,7 +346,7 @@ class TestCorpusIteration:
     def test_iter_cards_include_deleted(self, vault_corpus):
         a = _make_v2_paste(vault_corpus, "alpha")
         b = _make_v2_paste(vault_corpus, "beta")
-        server.delete_bookmark(id=a, user_confirmed=True)
+        server.delete_bookmark(id=a)
         ids = [c.id for c in corpus.iter_cards(include_deleted=True)]
         assert a in ids
         assert b in ids
@@ -360,21 +354,21 @@ class TestCorpusIteration:
     def test_iter_cards_metadata_excludes_deleted_default(self, vault_corpus):
         a = _make_v2_paste(vault_corpus, "alpha")
         b = _make_v2_paste(vault_corpus, "beta")
-        server.delete_bookmark(id=a, user_confirmed=True)
+        server.delete_bookmark(id=a)
         ids = [c.id for c in corpus.iter_cards_metadata()]
         assert b in ids
         assert a not in ids
 
     def test_load_card_by_id_excludes_deleted_default(self, vault_corpus):
         target = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target, user_confirmed=True)
+        server.delete_bookmark(id=target)
         with pytest.raises(XSensaiError) as exc_info:
             corpus.load_card_by_id(target)
         assert exc_info.value.code == "NO_RESULTS"
 
     def test_load_card_by_id_include_deleted(self, vault_corpus):
         target = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target, user_confirmed=True)
+        server.delete_bookmark(id=target)
         card = corpus.load_card_by_id(target, include_deleted=True)
         assert card.fm.deleted is True
 
@@ -455,7 +449,7 @@ class TestDedupTombstone:
 class TestTombstoneBlockedFormat:
     def test_no_slice_7_suffix_anywhere(self, vault_corpus):
         target = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target, user_confirmed=True)
+        server.delete_bookmark(id=target)
         result = server.annotate_card(
             id=target, why_saved="x", user_confirmed=True
         )
@@ -466,7 +460,7 @@ class TestTombstoneBlockedFormat:
 
     def test_format_contains_required_fields(self, vault_corpus):
         target = _make_v2_paste(vault_corpus, "alpha")
-        server.delete_bookmark(id=target, user_confirmed=True)
+        server.delete_bookmark(id=target)
         result = server.annotate_card(
             id=target, why_saved="x", user_confirmed=True
         )

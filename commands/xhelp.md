@@ -60,7 +60,7 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `get_review_cursor()` | Read the /xnote review walk cursor (UC10). |
 | `set_review_cursor(last_card_id?)` | Update or clear the /xnote review walk cursor (UC10). |
 | `xask_capabilities()` | Read-only deploy-status helper for `/xask` (Slice 3). |
-| `delete_bookmark(id, confirmation_nonce?)` | **Slice 7** — soft-delete a card via 2-call nonce/handshake. First call (no nonce) returns `[NONCE_REQUIRED]` with a one-time 8-char code; user echoes; second call redeems. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). Legacy `user_confirmed: bool` accepted for one release with migration message; **removed in v0.9.1.0** (calls TypeError after that). Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the parent shell skips the handshake for scripted maintenance. |
+| `delete_bookmark(id, confirmation_nonce?)` | **Slice 7** — soft-delete a card via 2-call nonce/handshake. First call (no nonce) returns `[NONCE_REQUIRED]` with a one-time 8-char code; user echoes; second call redeems. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). Legacy Slice 6 `user_confirmed: bool` was removed in v0.9.1.0 — stale callers raise `TypeError`. Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the parent shell skips the handshake for scripted maintenance. |
 | `restore_bookmark(id, confirmation_nonce?)` | **Slice 7** — un-delete a tombstoned card; same 2-call nonce/handshake as `delete_bookmark`. |
 | `list_deleted(limit?)` | **Slice 6** — list recently-deleted cards, newest-first (read-only). |
 

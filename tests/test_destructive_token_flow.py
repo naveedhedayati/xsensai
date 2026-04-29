@@ -4,11 +4,11 @@ delete_bookmark and restore_bookmark.
 Coverage map (TE numbering from plan):
   TE2  — lock contention after redeem (nonce consumed, op fails clean)
   TE4  — FastMCP tools/list shape after restart (smoke via subprocess)
-  TE5  — backward-compat: legacy user_confirmed=True returns NONCE_REQUIRED
+  TE5  — v0.9.1.0: legacy user_confirmed kwarg now raises TypeError
   TE8  — log redaction: full nonce never appears in caplog
   TE9  — restart-during-flow: deterministic NONCE_INVALID after reset
   TE10 — full failure-matrix: all paths consume nonce per AE10
-  TE13 — atomic markdown gate: xrestore.md has no `user_confirmed=True`
+  TE13 — atomic markdown gate: xrestore.md/xdelete.md have no `user_confirmed=True`
   Q9   — cron isolation regression: sync/headless never imports destructive tools
 
 These tests exercise the MCP tool layer end-to-end (function calls, not
@@ -153,35 +153,34 @@ class TestTwoCallFlowHappyPath:
         assert result["ok"] is True
 
 
-# ---- TE5: legacy user_confirmed=True returns NONCE_REQUIRED ----------------
+# ---- v0.9.1.0: legacy user_confirmed kwarg removed → TypeError -------------
 
 
-class TestLegacyKwargShim:
-    def test_legacy_user_confirmed_returns_nonce_required(self, vault_corpus):
+class TestLegacyKwargRemoved:
+    """v0.9.1.0: the one-release `user_confirmed` shim is gone. Stale
+    callers that still pass the kwarg get a naked TypeError per the
+    CHANGELOG promise.
+    """
+
+    def test_legacy_kwarg_raises_typeerror(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        result = server.delete_bookmark(id=target_id, user_confirmed=True)
-        assert result["ok"] is False
-        assert result["error"]["code"] == "NONCE_REQUIRED"
-        # Cause text mentions the deprecation
-        assert "deprecated" in result["error"]["message"].lower()
-        # Card is NOT deleted
-        card = corpus.load_card_by_id(target_id, corpus_path=vault_corpus, include_deleted=True)
+        with pytest.raises(TypeError, match="user_confirmed"):
+            server.delete_bookmark(id=target_id, user_confirmed=True)
+        # Card NOT deleted (TypeError prevents any work)
+        card = corpus.load_card_by_id(
+            target_id, corpus_path=vault_corpus, include_deleted=True
+        )
         assert card.fm.deleted is False
 
-    def test_legacy_user_confirmed_false_also_returns_nonce_required(
-        self, vault_corpus
-    ):
+    def test_legacy_kwarg_false_also_raises_typeerror(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        # user_confirmed=False used to be the soft-guard rejection.
-        # In Slice 7 it's still treated as a legacy signal (the flag
-        # was supplied at all, regardless of value).
-        result = server.delete_bookmark(id=target_id, user_confirmed=False)
-        assert result["error"]["code"] == "NONCE_REQUIRED"
+        with pytest.raises(TypeError, match="user_confirmed"):
+            server.delete_bookmark(id=target_id, user_confirmed=False)
 
-    def test_restore_legacy_kwarg_also_shimmed(self, vault_corpus):
+    def test_restore_legacy_kwarg_raises_typeerror(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        result = server.restore_bookmark(id=target_id, user_confirmed=True)
-        assert result["error"]["code"] == "NONCE_REQUIRED"
+        with pytest.raises(TypeError, match="user_confirmed"):
+            server.restore_bookmark(id=target_id, user_confirmed=True)
 
 
 # ---- TE10: full failure matrix — all paths consume nonce -------------------
@@ -258,23 +257,6 @@ class TestRedeemAlwaysConsumes:
             id=target_id, confirmation_nonce=nonce
         )
         assert replay["error"]["code"] == "NONCE_ALREADY_REDEEMED"
-
-    def test_legacy_plus_nonce_prefers_nonce(self, vault_corpus):
-        """F11 fix: if BOTH user_confirmed=True AND a valid nonce are
-        supplied, prefer the new flow (use the nonce). Don't silently
-        discard a valid code with the migration envelope.
-        """
-        target_id = _make_v2_paste(vault_corpus, "alpha")
-        first = server.delete_bookmark(id=target_id)
-        nonce = _extract_display_nonce(first["rendered_message"])
-        # Caller mid-migration supplies BOTH the new nonce AND the
-        # deprecated user_confirmed kwarg. Server should redeem the
-        # nonce path, not bounce them with NONCE_REQUIRED migration.
-        result = server.delete_bookmark(
-            id=target_id, confirmation_nonce=nonce, user_confirmed=True
-        )
-        assert result["ok"] is True
-        assert result["deleted"] is True
 
 
 # ---- TE9: restart-during-flow ---------------------------------------------
@@ -373,10 +355,11 @@ class TestAtomicMarkdownGate:
     def test_xrestore_md_has_no_legacy_kwarg(self):
         repo_root = Path(__file__).resolve().parent.parent
         markdown = (repo_root / "commands" / "xrestore.md").read_text(encoding="utf-8")
-        # Allow the documentation NOTE that mentions "DO NOT pass user_confirmed=True"
-        # but reject any actual call instruction.
+        # Reject any actual call instruction that includes the removed kwarg.
         # Pattern we want to forbid: `restore_bookmark(... user_confirmed=True ...)`
         # Pattern we allow: `restore_bookmark(id=..., confirmation_nonce=...)`
+        # The doc may still reference user_confirmed in past-tense prose
+        # (e.g., "the kwarg was removed in v0.9.1.0"), which the regex doesn't match.
         pattern_calls = re.findall(
             r"restore_bookmark\([^)]*user_confirmed\s*=\s*True", markdown
         )

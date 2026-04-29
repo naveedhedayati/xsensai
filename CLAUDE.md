@@ -26,7 +26,8 @@ by component, then priority).
 6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + heartbeat instrumentation + `/xhelp` cron banner. **Shipped (v0.6.0.0).**
 7. **Slice 6** — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP-only `delete_bookmark`/`restore_bookmark` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release as soft-landing. **Shipped (v0.7.0.0).**
 8. **Slice 7** — confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow). Replaces Slice 6's host-attestable `user_confirmed: bool` with a server-issued 8-char base32 nonce that the user echoes. Tombstone-on-redeem so error codes are derivable. One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance. /xdelete slash command deferred to follow-up (Slice 7.5+) to keep the security release scope-clean per dual-voice consensus. **Shipped (v0.8.0.0).**
-9. **Slice 7.5 (v0.9.0.0)** — `/xdelete` slash command + `.claude/settings.json` `permissions.ask` wiring auto-installed by `scripts/install_commands.sh`. Closes Slice 7's honest-framing gap: the cryptographic gate (Claude Code's per-tool permission prompt) is now the real user-attestation boundary, with the in-band 8-char nonce stacked on top. Two locked ADRs: ADR-001 (single-mode only — no batch delete; per-id attestation invariant), ADR-002 (Slice 2 mutation guards keep `user_confirmed: bool` because annotate/pin/paste are reversible). Plan + dual-voice review at `~/.claude/plans/deep-meandering-waffle.md`. v0.9.1.0 follow-up removes the legacy `user_confirmed` shim from `delete_bookmark`/`restore_bookmark` after >=7 day soak.
+9. **Slice 7.5 (v0.9.0.0)** — `/xdelete` slash command + `.claude/settings.json` `permissions.ask` wiring auto-installed by `scripts/install_commands.sh`. Closes Slice 7's honest-framing gap: the cryptographic gate (Claude Code's per-tool permission prompt) is now the real user-attestation boundary, with the in-band 8-char nonce stacked on top. Two locked ADRs: ADR-001 (single-mode only — no batch delete; per-id attestation invariant), ADR-002 (Slice 2 mutation guards keep `user_confirmed: bool` because annotate/pin/paste are reversible). Plan + dual-voice review at `~/.claude/plans/deep-meandering-waffle.md`. **Shipped (v0.9.0.0).**
+10. **Slice 7.5.1 (v0.9.1.0)** — removes the one-release legacy `user_confirmed: bool` shim from `delete_bookmark` and `restore_bookmark`. Stale callers passing `user_confirmed=` now hit a naked `TypeError`. Cutover gate met: >=7-day soak from v0.8.0.0 + ≥1 successful `/xdelete` round-trip with `permissions.ask` active + zero unexpected `NONCE_*` clusters. Plan + /plan-eng-review at `~/.claude/plans/clever-dazzling-spark.md`. **Shipped (v0.9.1.0).**
 
 ## Slice 1 — what works
 
@@ -436,7 +437,53 @@ single-PR plan to a v0.9.0.0 + v0.9.1.0 split).
   Closes the bundling-as-scope-contamination concern Slice 7 explicitly
   deferred for. The shim removal gate also requires (a) at least one
   successful `/xdelete` round-trip with `permissions.ask` active, and (b)
-  zero unexpected `NONCE_*` clusters in the privacy-aware log.
+  zero unexpected `NONCE_*` clusters in the privacy-aware log. **Gate
+  met → shipped in Slice 7.5.1 / v0.9.1.0; see below.**
+
+## Slice 7.5.1 — what works
+
+Slice 7.5.1 closes the v0.8.0.0 → v0.9.0.0 deprecation window for the
+Slice 7 contract change. The one-release legacy `user_confirmed: bool`
+shim on `delete_bookmark` / `restore_bookmark` is gone. Plan +
+/plan-eng-review at `~/.claude/plans/clever-dazzling-spark.md`.
+
+- **Removed: `user_confirmed: Optional[bool]` parameter** from
+  `delete_bookmark` and `restore_bookmark` signatures
+  ([src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py)).
+  Stale callers passing `user_confirmed=True` now raise
+  `TypeError: ... unexpected keyword argument 'user_confirmed'`. MCP
+  surfaces this as JSON-RPC -32603 to the host. Honors the v0.9.0.0
+  CHANGELOG promise verbatim.
+- **Removed: legacy-kwarg branches** (`elif user_confirmed is not None:`)
+  in both functions. The migration-text envelope path is gone.
+- **Removed: `legacy: bool` parameter** on `_nonce_required_envelope`
+  helper. Helper now has one cause-text path; the deprecation-specific
+  phrasing is gone with the shim.
+- **Removed: `tests/test_destructive_token_flow.py::TestLegacyKwargShim`
+  class** + the F11 fix test (`test_legacy_plus_nonce_prefers_nonce`).
+  Replaced by `TestLegacyKwargRemoved` (3 tests asserting `TypeError`
+  with `pytest.raises(TypeError, match="user_confirmed")`).
+- **Stripped: 32 `user_confirmed=True` kwargs** from
+  `tests/test_tombstone.py` `delete_bookmark` / `restore_bookmark` call
+  sites. The autouse `_destructive_bypass` fixture
+  (`XSENSAI_DESTRUCTIVE_BYPASS=1`) stays — it's the bypass that did the
+  real work; the kwarg was redundant. **`annotate_card` and `set_pin`
+  call sites in the same file keep `user_confirmed: bool`** per ADR-002.
+- **Doc-consistency test added**:
+  `tests/test_doc_consistency.py::test_changelog_has_v0_9_1_0_entry`
+  follows the Slice 7.5 backfill pattern + asserts the v0.9.1.0 section
+  text mentions `user_confirmed`, catching future copy-paste regressions
+  that drop the kwarg-removal context.
+- **`XSENSAI_DESTRUCTIVE_BYPASS=1` env-var path** is unchanged. Still
+  the documented escape hatch for scripted maintenance and test fixtures.
+- **Doc cleanup**: `commands/xdelete.md`, `commands/xrestore.md`,
+  `TROUBLESHOOTING.md` `[NONCE_REQUIRED]` entry — all stripped of the
+  "DO NOT pass user_confirmed=True" / "deprecated kwarg" notes that
+  referenced the now-gone shim.
+- **/plan-eng-review summary**: 2 issues (1 architecture, 1 code
+  quality), both resolved (naked TypeError per spec; v0.9.1.0
+  doc-consistency test added). 0 critical gaps. 1 new TODO surfaced
+  (VERSION + pyproject.toml unification, P3).
 
 ## Slice 1 — config
 

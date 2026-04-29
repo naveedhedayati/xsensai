@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 9 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 7.5 (v0.9.0.0) — `/xdelete` slash command + auto-installed `permissions.ask` cryptographic gate for destructive MCP tools. The in-band 8-character nonce handshake stacks on top of Claude Code's per-call permission prompt; both intentional, both protect against different failure modes. v0.9.1.0 follow-up removes the legacy `user_confirmed` shim from `delete_bookmark`/`restore_bookmark`. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 7.5.1 (v0.9.1.0) — removes the one-release legacy `user_confirmed: bool` shim from `delete_bookmark`/`restore_bookmark`. Calls passing the kwarg now `TypeError`; only the 2-call confirmation-nonce flow (or the `XSENSAI_DESTRUCTIVE_BYPASS` env-bypass for scripted maintenance) is accepted. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 

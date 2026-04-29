@@ -173,10 +173,9 @@ listed first).
   verifies `Selected: {id}` matches their intent before echoing the nonce; the
   nonce is server-bound to that exact id, so a malicious snippet flipping the
   pick still requires the user to echo the code displayed for the WRONG card.
-- DO NOT pass `user_confirmed=True` — that's the deprecated Slice 6 kwarg, which
-  is being removed in v0.9.1.0. If you supply it in v0.9.0.0, the server returns
-  a `[NONCE_REQUIRED]` envelope with deprecation text; in v0.9.1.0+ the call
-  TypeErrors.
+- The `user_confirmed: bool` kwarg from Slice 6 was removed in v0.9.1.0.
+  Calls that still pass it raise `TypeError`. Use the 2-call nonce flow
+  above.
 - If the first call returns `[USER_CONFIRMATION_REQUIRED]` instead of
   `[NONCE_REQUIRED]`, the MCP server is running pre-Slice-7 code. Tell the user
   to run `pip install -e .` from the xsensai repo root and restart Claude Code.
