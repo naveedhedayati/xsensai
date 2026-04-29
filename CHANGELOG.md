@@ -45,10 +45,13 @@ DISAGREE'd, drove the original single-PR plan to a v0.9.0.0 + v0.9.1.0 split.
   TD-ENG-1). Plus ADR-001 (single-mode `/xdelete`) and ADR-002 (Slice 2
   guards stay `user_confirmed: bool` because annotate/pin/paste are
   reversible).
-- **`tests/test_install_commands.py`** (+17 tests) — pytest + subprocess
+- **`tests/test_install_commands.py`** (+24 tests) — pytest + subprocess
   against tmp HOME covering empty/missing file, existing-keys preservation,
   idempotency, malformed-JSON safe-skip, wildcard-override detection (literal
-  + suffix wildcard), backup behavior.
+  + suffix wildcard), backup chmod 0600 + retention cap, settings chmod 0600,
+  non-string allow entries, large-file safe-skip, target-is-directory
+  safe-skip, concurrent-runs no lost updates. Total project tests:
+  707 → 735 (+28 net).
 - **`tests/manual/SLICE_7_5_GAUNTLET.md`** — manual gauntlet for /xdelete
   happy path + nonce error envelopes + permissions.ask modal observation +
   wildcard-override warning + MCP-server-version-mismatch warning.

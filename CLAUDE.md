@@ -417,10 +417,15 @@ single-PR plan to a v0.9.0.0 + v0.9.1.0 split).
     modal not appearing", "MCP server version mismatch". Per AD7.
   - `CHANGELOG.md` v0.9.0.0 entry includes proactive deprecation note that
     v0.9.1.0 will TypeError on `user_confirmed` calls. Per AD11.
-- **Tests** (+17 new): `tests/test_install_commands.py` — 17 pytest +
-  subprocess cases against tmp HOME covering empty/missing file, existing
-  keys preserved, idempotency, malformed JSON safe-skip, wildcard override
-  detection, backup behavior. Per AE3.
+- **Tests** (+28 net, 707 → 735): `tests/test_install_commands.py` — 24
+  pytest + subprocess cases against tmp HOME covering empty/missing file,
+  existing keys preserved, idempotency, malformed JSON safe-skip, wildcard
+  override detection, backup chmod 0600 + retention cap, settings chmod 0600,
+  non-string allow entries, large-file safe-skip, target-is-directory
+  safe-skip, concurrent-runs no lost updates (per AE3 + /review hardening).
+  Plus regression tests for the new `is_v1` field on `get_bookmark`,
+  the AD3 NONCE_OPERATION_MISMATCH next_action wording, and the extended
+  atomic-markdown gate scanning `commands/xdelete.md`.
 - **Manual gauntlet**:
   [tests/manual/SLICE_7_5_GAUNTLET.md](tests/manual/SLICE_7_5_GAUNTLET.md)
   covers /xdelete happy path + nonce error envelopes + permissions.ask modal
