@@ -196,6 +196,41 @@ gh workflow run sync.yml
 of each individual write. `/xsync` and `/xextract` acquire/release per
 card to keep `/xpaste` from blocking on long backlogs.
 
+### Guard levels (Slice 7)
+
+x-sensai has two confirmation patterns. Same `card_write` lock either way;
+the difference is what gates the host LLM from invoking the tool.
+
+| Tool | Guard | Reason |
+|---|---|---|
+| `paste_bookmark` (`/xpaste`) | **Soft** — `user_confirmed: bool` | Recoverable: re-paste or edit |
+| `annotate_card` (`/xnote`) | **Soft** — `user_confirmed: bool` | Recoverable: edit `## Notes` block |
+| `set_pin` (`/xpin`) | **Soft** — `user_confirmed: bool` | Recoverable: toggle back |
+| `delete_bookmark` | **Strong** — confirmation nonce/handshake | Destructive transition; requires explicit user-typed code |
+| `restore_bookmark` (`/xrestore`) | **Strong** — confirmation nonce/handshake | Destructive transition; requires explicit user-typed code |
+
+**Soft guards** are accident-guards — they protect against the host LLM
+firing a tool in the wrong context (e.g., reading a card body that
+mentions paste). They are NOT a security boundary; the host sets the bool.
+
+**Strong guards** are the 2-call handshake. The host calls `delete_bookmark(id)`
+without a nonce; server returns `[NONCE_REQUIRED]` with a one-time
+8-character code in `<<<NONCE: ABCD-EFGH>>>` markers. User echoes the
+code; host calls `delete_bookmark(id, confirmation_nonce=...)` to redeem.
+Honest framing: this raises social-engineering effort by one step; the
+user remains the only true boundary. For cryptographic gating, configure
+Claude Code's per-tool permission prompt in `.claude/settings.json`.
+
+**Why two patterns?** Card mutations are reversible — you can re-edit a
+note or unpin a card with one slash command. Deletes aren't reversible
+without an explicit `/xrestore`, and `/xrestore` itself moves state.
+Different blast radius, different gate. See TROUBLESHOOTING.md
+"Resolved (Slice 7)" section for full envelope details.
+
+**Power-user bypass.** `XSENSAI_DESTRUCTIVE_BYPASS=1` in the MCP server's
+parent shell skips the handshake. For scripted maintenance only — the
+env var is read at call time so the host LLM cannot inject it.
+
 Reindex (`qmd update`) holds the `index_rebuild` lock cross-process —
 `/xsync` finalize and `/xfind`/`/xask` read-side reindex serialize on it.
 
