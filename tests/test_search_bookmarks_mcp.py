@@ -203,3 +203,34 @@ def test_get_bookmark_round_trip() -> None:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
+
+
+def test_get_bookmark_includes_is_v1_field() -> None:
+    """Slice 7.5 (AE5 fix): get_bookmark exposes top-level `is_v1: bool` so
+    /xdelete's id-resolve path can short-circuit on v1 cards before issuing
+    a nonce. The response shape MUST include `is_v1` for v2 cards (False)
+    and would expose `is_v1: True` for v1 cards if loaded.
+    """
+    cards_dir = Path(__file__).parent / "fixtures" / "cards"
+    proc = _spawn(env_extra={"XSENSAI_CORPUS_PATH": str(cards_dir)})
+    try:
+        _initialize(proc)
+        _send(proc, {
+            "jsonrpc": "2.0", "id": 6, "method": "tools/call",
+            "params": {
+                "name": "get_bookmark",
+                "arguments": {"id": "2026-04-20-paulg-1234567890"},
+            },
+        })
+        resp = _recv(proc)
+        text_block = resp["result"]["content"][0]
+        text = text_block.get("text") or json.dumps(text_block)
+        # Existing fixtures are v2 (have raw_path/raw_checksum)
+        assert "is_v1" in text, f"is_v1 field missing from response: {text[:200]}"
+    finally:
+        proc.stdin.close()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()

@@ -26,6 +26,7 @@ by component, then priority).
 6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + heartbeat instrumentation + `/xhelp` cron banner. **Shipped (v0.6.0.0).**
 7. **Slice 6** — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP-only `delete_bookmark`/`restore_bookmark` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release as soft-landing. **Shipped (v0.7.0.0).**
 8. **Slice 7** — confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow). Replaces Slice 6's host-attestable `user_confirmed: bool` with a server-issued 8-char base32 nonce that the user echoes. Tombstone-on-redeem so error codes are derivable. One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance. /xdelete slash command deferred to follow-up (Slice 7.5+) to keep the security release scope-clean per dual-voice consensus. **Shipped (v0.8.0.0).**
+9. **Slice 7.5 (v0.9.0.0)** — `/xdelete` slash command + `.claude/settings.json` `permissions.ask` wiring auto-installed by `scripts/install_commands.sh`. Closes Slice 7's honest-framing gap: the cryptographic gate (Claude Code's per-tool permission prompt) is now the real user-attestation boundary, with the in-band 8-char nonce stacked on top. Two locked ADRs: ADR-001 (single-mode only — no batch delete; per-id attestation invariant), ADR-002 (Slice 2 mutation guards keep `user_confirmed: bool` because annotate/pin/paste are reversible). Plan + dual-voice review at `~/.claude/plans/deep-meandering-waffle.md`. v0.9.1.0 follow-up removes the legacy `user_confirmed` shim from `delete_bookmark`/`restore_bookmark` after >=7 day soak.
 
 ## Slice 1 — what works
 
@@ -343,7 +344,99 @@ dimensions and pushed the design from a 3-call dance to a cleaner
   chain — for genuine cryptographic gating, configure Claude Code's
   per-tool permission prompt on
   `mcp__xsensai__delete_bookmark` and `mcp__xsensai__restore_bookmark`
-  in `.claude/settings.json`.
+  in `.claude/settings.json`. **(Slice 7.5 auto-installs this; see below.)**
+
+## Slice 7.5 — what works
+
+Slice 7.5 ships `/xdelete` and auto-installs the `permissions.ask`
+cryptographic gate alongside the in-band nonce handshake. Plan + dual-voice
+review at `~/.claude/plans/deep-meandering-waffle.md` (CEO + Eng + DX
+phases; 6/6 CEO + 4/6 Eng + 5/6 DX dimensions DISAGREE'd, drove the original
+single-PR plan to a v0.9.0.0 + v0.9.1.0 split).
+
+- **`/xdelete` slash command**
+  ([commands/xdelete.md](commands/xdelete.md)) — search → pick (id / URL /
+  keyword) → first call without `confirmation_nonce` → server returns
+  `[NONCE_REQUIRED]` with `<<<NONCE: ABCD-EFGH>>>` → user echoes →
+  `delete_bookmark(id, confirmation_nonce=<echoed>)` redeems. Mirrors
+  `commands/xrestore.md`'s nonce flow + `commands/xnote.md`'s single-mode
+  card resolution. Single-mode only by design (ADR-001).
+- **`permissions.ask` auto-install**
+  ([scripts/_settings_merge.py](scripts/_settings_merge.py)) — Python helper
+  invoked by `scripts/install_commands.sh` to merge
+  `mcp__xsensai__delete_bookmark` and `mcp__xsensai__restore_bookmark` into
+  `~/.claude/settings.json`'s `permissions.ask` array. Per the Slice 7.5
+  /autoplan TD-ENG-1 decision, target is **user-global** (not project-local
+  in xsensai or vault). Idempotent. Uses stdlib `json` only (no `jq` dep).
+  Backs up `{path}.bak.{ts}` on every real change. Detects pre-existing
+  `permissions.allow` wildcards that subsume the gate and prints a
+  `[PERMISSIONS_WILDCARD_OVERRIDE]` warning. On malformed JSON: backs up
+  and skips merge with `[SETTINGS_MALFORMED]` envelope, doesn't kill install.
+- **`install_commands.sh` extensions**
+  ([scripts/install_commands.sh](scripts/install_commands.sh)) — invokes the
+  Python settings merge helper; announces every config change (AD1); detects
+  the MCP server version via `python -c "import xsensai; print(xsensai.__version__)"`
+  and prints a loud WARN if `< 0.8` ("commands target v0.8.0.0+; run
+  `pip install -e .` and restart Claude Code"). Per AD2.
+- **Stacked attestation gates**: the `permissions.ask` gate is the
+  **cryptographic boundary** (Claude Code surfaces a native modal before
+  every destructive call); the 8-character nonce is the **user-attestation
+  gate** (the user types the exact code displayed by the server, server-bound
+  to the specific (operation, target) pair). Both intentional, both
+  protect against different failure modes. Honest framing kept in
+  [docs/PERMISSIONS_ASK.md](docs/PERMISSIONS_ASK.md).
+- **`NONCE_OPERATION_MISMATCH` next_action text update** (AD3): now
+  explicitly references delete-vs-restore: *"Re-run {cmd} to issue a fresh
+  code bound to this operation and card. (You may have issued the code via
+  /xdelete and tried to redeem on /xrestore, or vice versa.)"*
+- **V1 pre-flight short-circuit on id-resolve** (AE5): `/xdelete` calls
+  `get_bookmark(id)` first; if the result has neither `raw_path` nor
+  `raw_checksum`, the card is v1 and the slash command shows the
+  `[V1_MUTATION_BLOCKED]` envelope BEFORE issuing a nonce. Keyword/URL
+  paths can't peek at v1 detection without an extra round trip — they
+  consume a nonce on v1 by design (single-rule contract from Slice 7
+  AE10).
+- **Atomic-markdown gate extension** (AE4):
+  [tests/test_destructive_token_flow.py](tests/test_destructive_token_flow.py)
+  `TestAtomicMarkdownGate` now scans `commands/xdelete.md` in addition to
+  `commands/xrestore.md`. Closes the v0.9.0.0 → v0.9.1.0 coexistence-window
+  regression hole.
+- **Doc surface**:
+  - NEW `docs/PERMISSIONS_ASK.md` — 5-section reference: what
+    `permissions.ask` does, why xsensai uses it, precedence caveats
+    (`permissions.allow` supersedes `permissions.ask`), three-options
+    (Allow once / Allow for this session / Always allow), file-scope
+    decision, plus ADR-001 + ADR-002.
+  - `commands/xnote.md`, `commands/xpin.md`, `commands/xpaste.md` — each
+    gets a one-paragraph ADR-002 callout explaining why the soft
+    `user_confirmed: bool` guard stays. Per AD5.
+  - `commands/xhelp.md` — `/xdelete` moved from Planned → Available now,
+    with permissions.ask line near the table. Per AD10.
+  - `TROUBLESHOOTING.md` — 4 new failure-mode entries:
+    `[SETTINGS_MALFORMED]`, `[PERMISSIONS_WILDCARD_OVERRIDE]`, "Permissions
+    modal not appearing", "MCP server version mismatch". Per AD7.
+  - `CHANGELOG.md` v0.9.0.0 entry includes proactive deprecation note that
+    v0.9.1.0 will TypeError on `user_confirmed` calls. Per AD11.
+- **Tests** (+28 net, 707 → 735): `tests/test_install_commands.py` — 24
+  pytest + subprocess cases against tmp HOME covering empty/missing file,
+  existing keys preserved, idempotency, malformed JSON safe-skip, wildcard
+  override detection, backup chmod 0600 + retention cap, settings chmod 0600,
+  non-string allow entries, large-file safe-skip, target-is-directory
+  safe-skip, concurrent-runs no lost updates (per AE3 + /review hardening).
+  Plus regression tests for the new `is_v1` field on `get_bookmark`,
+  the AD3 NONCE_OPERATION_MISMATCH next_action wording, and the extended
+  atomic-markdown gate scanning `commands/xdelete.md`.
+- **Manual gauntlet**:
+  [tests/manual/SLICE_7_5_GAUNTLET.md](tests/manual/SLICE_7_5_GAUNTLET.md)
+  covers /xdelete happy path + nonce error envelopes + permissions.ask modal
+  observation + wildcard-override warning observation.
+- **Reshape audit**: original single-PR plan was reshaped at /autoplan CEO
+  premise gate to a two-release split (`/xdelete` + permissions wiring →
+  v0.9.0.0; `user_confirmed` shim removal → v0.9.1.0 after >=7 day soak).
+  Closes the bundling-as-scope-contamination concern Slice 7 explicitly
+  deferred for. The shim removal gate also requires (a) at least one
+  successful `/xdelete` round-trip with `permissions.ask` active, and (b)
+  zero unexpected `NONCE_*` clusters in the privacy-aware log.
 
 ## Slice 1 — config
 

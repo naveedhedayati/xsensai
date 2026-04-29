@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 9 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 7 — confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow replacing Slice 6 host-attestable `user_confirmed: bool`). One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 7.5 (v0.9.0.0) — `/xdelete` slash command + auto-installed `permissions.ask` cryptographic gate for destructive MCP tools. The in-band 8-character nonce handshake stacks on top of Claude Code's per-call permission prompt; both intentional, both protect against different failure modes. v0.9.1.0 follow-up removes the legacy `user_confirmed` shim from `delete_bookmark`/`restore_bookmark`. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
@@ -68,7 +68,8 @@ export XSENSAI_CORPUS_PATH=~/Documents/Vault/04_areas/x-bookmarks
 | `/xask` | Claude Code slash command | Thinking session: corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs (Slice 3) |
 | `/xsync` | Claude Code slash command | Ingest new bookmarks from X via XDK; smart-default extraction (inline ≤5, deferred >5) (Slice 4) |
 | `/xextract` | Claude Code slash command | Backfill extraction for cards left as `extraction_pending: true` (Slice 4) |
-| `/xrestore` | Claude Code slash command | Restore a tombstoned card (clears `deleted` + `deleted_at`); pairs with MCP `delete_bookmark` (Slice 6) |
+| `/xrestore` | Claude Code slash command | Restore a tombstoned card (clears `deleted` + `deleted_at`); pairs with `/xdelete` via the Slice 7 nonce/handshake |
+| `/xdelete` | Claude Code slash command | Soft-delete a card via the 2-call nonce/handshake (Slice 7.5). Auto-installed `permissions.ask` gate prompts per call. See [docs/PERMISSIONS_ASK.md](docs/PERMISSIONS_ASK.md) |
 | `search_bookmarks` | MCP tool (any Claude conversation) | Structured response: `{hits, meta, rendered_markdown}` (tombstone-aware via `include_deleted=False` default) |
 | `get_bookmark` | MCP tool | Full card detail by id (returned by search_bookmarks) |
 | `paste_bookmark` / `recover_aborted_paste` | MCP tools | Powers `/xpaste` (Slice 2) |
@@ -174,6 +175,8 @@ This validates the autoplan D1 decision — QMD's BM25 ranking is sufficient for
 - **Slice 4** (shipped, v0.5.0.0): XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing + cross-process index_rebuild lock.
 - **Slice 5** (shipped, v0.6.0.0): GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10) + heartbeat instrumentation.
 - **Slice 6** (shipped, v0.7.0.0): v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP `delete_bookmark` / `restore_bookmark` / `list_deleted` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release; promote for deletion in Slice 7+ once 0 v1 cards observed for 14 consecutive days.
+- **Slice 7** (shipped, v0.8.0.0): confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow replacing Slice 6 host-attestable `user_confirmed: bool`). One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance.
+- **Slice 7.5** (shipped, v0.9.0.0): `/xdelete` slash command + auto-installed `.claude/settings.json` `permissions.ask` cryptographic gate via `scripts/_settings_merge.py`. Closes Slice 7's honest-framing gap. Two locked ADRs: ADR-001 (single-mode `/xdelete`) and ADR-002 (Slice 2 mutation guards stay `user_confirmed: bool` because annotate/pin/paste are reversible). v0.9.1.0 follow-up removes the legacy shim after >=7 day soak.
 
 ## Troubleshooting
 

@@ -701,7 +701,16 @@ makes the path through the boundary visible.
 For genuine user-attestation, configure
 [Claude Code's per-tool permission prompt](https://code.claude.com/docs/en/permissions)
 on `mcp__xsensai__delete_bookmark` and `mcp__xsensai__restore_bookmark`
-in `.claude/settings.json`. That gates the tool call at the host level.
+in `~/.claude/settings.json`. That gates the tool call at the host level.
+
+**Slice 7.5 (v0.9.0.0) auto-installs this gate.**
+`./scripts/install_commands.sh` writes the `permissions.ask` entries to your
+user-global `~/.claude/settings.json` via `scripts/_settings_merge.py`. See
+[docs/PERMISSIONS_ASK.md](docs/PERMISSIONS_ASK.md) for the JSON shape, the
+three options when the modal fires (Allow once / Allow for this session /
+Always allow), the precedence caveat (`permissions.allow` supersedes
+`permissions.ask`), and the override warning (`[PERMISSIONS_WILDCARD_OVERRIDE]`)
+that fires when a pre-existing wildcard subsumes the gate.
 
 **Five new error envelopes** (all retryable):
 
@@ -714,7 +723,8 @@ The first half of the 2-call destructive flow. Returned when
 echo it.
 
 Also returned when the deprecated Slice 6 `user_confirmed: bool`
-kwarg is supplied — one-release migration aid, removed in v0.9.
+kwarg is supplied — one-release migration aid, removed in v0.9.1.0
+(calls with that kwarg `TypeError` after that release).
 
 ### NONCE_INVALID
 
@@ -723,8 +733,7 @@ Likely cause: typo in the echoed code, OR the code expired and was
 garbage-collected, OR the MCP server restarted between issue and
 redeem.
 
-**Fix**: Re-run `/xrestore` (or `/xdelete` once it ships in Slice 7.5+)
-to issue a fresh code.
+**Fix**: Re-run `/xrestore` or `/xdelete` to issue a fresh code.
 
 ### NONCE_EXPIRED
 
@@ -746,6 +755,79 @@ single-use and per-(operation, target).
 The supplied code was already used. Each code is single-use.
 
 **Fix**: Re-run the slash command for a fresh code.
+
+---
+
+## Resolved (Slice 7.5 / v0.9.0.0): permissions.ask install + new failure modes
+
+### `[SETTINGS_MALFORMED]` (install-time)
+
+`./scripts/install_commands.sh` tried to merge `permissions.ask` entries into
+`~/.claude/settings.json` but the file is not valid JSON.
+
+**Fix**: The install helper backed up the original to
+`~/.claude/settings.json.bak.<timestamp>` and skipped the merge (the rest of
+the install continued — slash commands installed normally). Fix the JSON in
+the original file and re-run `./scripts/install_commands.sh`.
+
+### `[PERMISSIONS_WILDCARD_OVERRIDE]` (install-time WARN)
+
+Your `~/.claude/settings.json` has `permissions.allow` entries (literal or
+wildcard like `mcp__*`) that subsume the `ask` entries the install helper
+just wrote. Claude Code's permission prompt will NOT fire for these tools —
+the cryptographic gate is bypassed.
+
+**Fix**: edit `~/.claude/settings.json`, narrow or remove the matching
+`permissions.allow` entry, re-run `./scripts/install_commands.sh`. See
+[docs/PERMISSIONS_ASK.md](docs/PERMISSIONS_ASK.md#3-precedence--permissionsallow-supersedes-permissionsask).
+
+### Permissions modal not appearing on `/xdelete` or `/xrestore`
+
+Most common cause: a `permissions.allow` wildcard subsumes the `ask` entry.
+Diagnostic:
+
+```bash
+cat ~/.claude/settings.json | python -m json.tool | grep -A5 permissions
+```
+
+Look for entries like `"mcp__*"` or `"mcp__xsensai__*"` in `allow`. Remove or
+narrow them. Restart Claude Code.
+
+Other causes: (a) Claude Code is using a project-local `.claude/settings.json`
+that overrides user-global; check `<repo>/.claude/settings.json`. (b) The
+install helper wasn't run — check for `permissions.ask` entries in the file;
+re-run `./scripts/install_commands.sh` if missing.
+
+### "Always allow" accidentally clicked on the permissions modal
+
+Clicking "Always allow" moves the tool from `permissions.ask` to
+`permissions.allow` permanently. To restore the gate:
+
+```bash
+# Edit ~/.claude/settings.json — remove the matching entry from allow
+$EDITOR ~/.claude/settings.json
+# Re-run install to ensure ask entries are present
+./scripts/install_commands.sh
+# Restart Claude Code
+```
+
+### MCP server version mismatch (returns `[USER_CONFIRMATION_REQUIRED]`)
+
+The Slice 7+ slash commands (`/xdelete`, `/xrestore`) call `delete_bookmark`
+or `restore_bookmark` and expect `[NONCE_REQUIRED]` envelopes. If the MCP
+server is on a pre-Slice-7 version, it returns `[USER_CONFIRMATION_REQUIRED]`
+instead — the slash commands won't know what to do.
+
+**Fix**:
+
+```bash
+cd /path/to/xsensai
+pip install -e .
+# Then restart Claude Code to reload the MCP server
+```
+
+The Slice 7.5 install script prints a warning when it detects this mismatch
+(`WARN: xsensai MCP server is version X but commands target Y`).
 
 ---
 

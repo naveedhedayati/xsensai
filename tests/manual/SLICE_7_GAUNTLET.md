@@ -84,6 +84,11 @@ After G1 (card is deleted), run `/xrestore`.
 
 ## G6 — Legacy-kwarg compat shim
 
+> **Note:** this scenario applies to v0.8.x and v0.9.0.x ONLY. In v0.9.1.0+
+> the shim is removed and the same call returns a `TypeError`-equivalent
+> (FastMCP rejects the unknown kwarg). See `SLICE_7_5_GAUNTLET.md` for the
+> v0.9.0.0 happy-path delete flow.
+
 In Claude Code (NOT via slash command — direct MCP-tool invocation):
 
 ```
@@ -94,9 +99,6 @@ Call delete_bookmark with id="<id>" and user_confirmed=True.
 *"`user_confirmed: bool` is deprecated in Slice 7."* The nonce is
 embedded in the rendered_message. Card is NOT deleted. Following the
 nonce flow from there should complete the delete.
-
-This shim is removed in v0.9. After v0.9, the same call returns a
-`TypeError`-equivalent (FastMCP rejects unknown kwarg).
 
 ---
 

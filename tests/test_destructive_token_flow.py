@@ -359,9 +359,15 @@ class TestDestructiveBypass:
 
 
 class TestAtomicMarkdownGate:
-    """Verify commands/xrestore.md and the server signature haven't drifted.
-    If the markdown still references `user_confirmed=True` for delete/restore
-    after Slice 7 ships, the host LLM will follow the wrong flow.
+    """Verify commands/xrestore.md and commands/xdelete.md and the server
+    signature haven't drifted. If a slash-command markdown still references
+    `user_confirmed=True` for delete/restore after Slice 7 ships, the host
+    LLM will follow the wrong flow.
+
+    Slice 7.5 (AE4): /xdelete ships in v0.9.0.0, BEFORE the v0.9.1.0 shim
+    removal. The atomic-markdown gate must scan xdelete.md too — without it,
+    the v0.9.0.0 → v0.9.1.0 coexistence window is a regression hole (a stale
+    /xdelete instruction could silently reintroduce the legacy flow).
     """
 
     def test_xrestore_md_has_no_legacy_kwarg(self):
@@ -388,6 +394,37 @@ class TestAtomicMarkdownGate:
     def test_xrestore_md_mentions_nonce_flow(self):
         repo_root = Path(__file__).resolve().parent.parent
         markdown = (repo_root / "commands" / "xrestore.md").read_text(encoding="utf-8")
+        assert "confirmation_nonce" in markdown
+        assert "NONCE_REQUIRED" in markdown
+        assert "<<<NONCE:" in markdown
+
+    def test_xdelete_md_has_no_legacy_kwarg(self):
+        """Slice 7.5 (AE4): same regression net for the new /xdelete command."""
+        repo_root = Path(__file__).resolve().parent.parent
+        xdelete = repo_root / "commands" / "xdelete.md"
+        if not xdelete.exists():
+            pytest.skip("commands/xdelete.md not present (pre-v0.9.0.0)")
+        markdown = xdelete.read_text(encoding="utf-8")
+        pattern_calls = re.findall(
+            r"delete_bookmark\([^)]*user_confirmed\s*=\s*True", markdown
+        )
+        assert pattern_calls == [], (
+            f"xdelete.md calls delete_bookmark with user_confirmed=True: "
+            f"{pattern_calls!r}"
+        )
+        pattern_calls_restore = re.findall(
+            r"restore_bookmark\([^)]*user_confirmed\s*=\s*True", markdown
+        )
+        assert pattern_calls_restore == [], (
+            f"xdelete.md calls restore_bookmark with user_confirmed=True"
+        )
+
+    def test_xdelete_md_mentions_nonce_flow(self):
+        repo_root = Path(__file__).resolve().parent.parent
+        xdelete = repo_root / "commands" / "xdelete.md"
+        if not xdelete.exists():
+            pytest.skip("commands/xdelete.md not present (pre-v0.9.0.0)")
+        markdown = xdelete.read_text(encoding="utf-8")
         assert "confirmation_nonce" in markdown
         assert "NONCE_REQUIRED" in markdown
         assert "<<<NONCE:" in markdown

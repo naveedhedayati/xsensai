@@ -126,6 +126,23 @@ def test_operation_mismatch_for_cross_target_nonce(store: NonceStore) -> None:
     assert _err_code(exc_info.value) == "NONCE_OPERATION_MISMATCH"
 
 
+def test_operation_mismatch_next_action_mentions_xdelete_xrestore(
+    store: NonceStore,
+) -> None:
+    """Slice 7.5 (AD3): next_action explicitly references both slash commands
+    so the user knows which one to re-run when they crossed delete/restore.
+    Regression net for the AD3 text update.
+    """
+    issued = store.issue(operation="delete", target_id="x")
+    with pytest.raises(XSensaiError) as exc_info:
+        store.redeem(nonce=issued.nonce, operation="restore", target_id="x")
+    err = exc_info.value
+    assert err.code == "NONCE_OPERATION_MISMATCH"
+    assert "/xdelete" in err.next_action
+    assert "/xrestore" in err.next_action
+    assert "vice versa" in err.next_action.lower()
+
+
 def test_invalid_nonce_unknown_string(store: NonceStore) -> None:
     store.issue(operation="delete", target_id="x")
     with pytest.raises(XSensaiError) as exc_info:

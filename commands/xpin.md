@@ -19,6 +19,12 @@ Tombstoned cards (frontmatter `deleted: true`) are REFUSED with
 `[TOMBSTONE_BLOCKED]` (Slice 6). Restore via `/xrestore` if you want
 to re-pin a deleted card.
 
+> **Why `/xpin` uses `user_confirmed=True` (a soft guard) and not the
+> nonce/handshake** that `/xdelete` and `/xrestore` use: pinning is
+> reversible — toggle back with one slash command. The nonce/handshake
+> exists for destructive transitions, not toggleable state. See ADR-002 in
+> `docs/PERMISSIONS_ASK.md` and the "Guard levels" table in `/xhelp`.
+
 ## Mode dispatch
 
 Ask: "Pin a card, unpin a card, or list pinned? (`pin`, `unpin`, or

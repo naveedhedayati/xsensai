@@ -10,9 +10,7 @@ Restores a card that was previously soft-deleted via `delete_bookmark`. The
 card stays on disk while deleted (frontmatter `deleted: true`); restoring
 clears the flag so the card returns to search, list ops, and dedup.
 
-Soft-delete in Slice 6 is via the `delete_bookmark` MCP tool (no `/xdelete`
-slash command yet — ships in Slice 7.5/8 once the nonce contract has been
-in production for a release).
+Soft-delete via `/xdelete` (or the `delete_bookmark` MCP tool directly).
 
 **Slice 7 update — confirmation handshake.** Restore now uses a two-call
 nonce/handshake instead of `user_confirmed: True`. The first call to

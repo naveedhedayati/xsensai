@@ -84,13 +84,15 @@ def test_troubleshooting_covers_slice_5_codes(docs):
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 
-def test_readme_current_slice_is_6(docs):
-    """README's 'Current slice' line must reference the active slice.
+def test_readme_current_slice_matches_version(docs):
+    """README's 'Current slice' line must reference the active VERSION.
 
-    Updated for Slice 6 (v0.7.0.0): v1→v2 migration with byte-exact
-    rollback + tombstone schema + shadow-mode union merge driver +
-    guided setup wizard.
+    Slice 7.5 (v0.9.0.0): made dynamic — was hardcoded to "Slice 6" since
+    Slice 6 and missed bumps in Slice 7 + Slice 7.5. Now derives the
+    expected version from the VERSION file so future slice bumps don't
+    silently break this test.
     """
+    version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
     readme = docs["README.md"]
     current_line = None
     for line in readme.splitlines():
@@ -98,12 +100,28 @@ def test_readme_current_slice_is_6(docs):
             current_line = line
             break
     assert current_line is not None, "README missing **Current slice:** line"
-    assert "Slice 6" in current_line, f"README current slice not Slice 6: {current_line}"
+    # The current-slice line must mention the active VERSION (e.g., "v0.9.0.0").
+    assert f"v{version}" in current_line or version in current_line, (
+        f"README current slice doesn't reference VERSION {version}: {current_line}"
+    )
 
 
 def test_changelog_has_v0_7_0_0_entry(docs):
     """CHANGELOG must have a v0.7.0.0 entry for Slice 6."""
     assert "[0.7.0.0]" in docs["CHANGELOG.md"]
+
+
+def test_changelog_has_v0_8_0_0_entry(docs):
+    """CHANGELOG must have a v0.8.0.0 entry for Slice 7 (nonce/handshake).
+
+    Slice 7.5 backfill: Slice 7 should have added this test but didn't.
+    """
+    assert "[0.8.0.0]" in docs["CHANGELOG.md"]
+
+
+def test_changelog_has_v0_9_0_0_entry(docs):
+    """CHANGELOG must have a v0.9.0.0 entry for Slice 7.5 (/xdelete + permissions.ask)."""
+    assert "[0.9.0.0]" in docs["CHANGELOG.md"]
 
 
 def test_troubleshooting_covers_slice_6_codes(docs):
@@ -117,6 +135,41 @@ def test_troubleshooting_covers_slice_6_codes(docs):
         "SETUP_FIRST_RUN_FAILED",
     ]:
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_troubleshooting_covers_slice_7_codes(docs):
+    """All Slice 7 nonce envelopes must be documented in TROUBLESHOOTING.
+
+    Slice 7.5 backfill: Slice 7 should have added this test.
+    """
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in [
+        "NONCE_REQUIRED",
+        "NONCE_INVALID",
+        "NONCE_EXPIRED",
+        "NONCE_OPERATION_MISMATCH",
+        "NONCE_ALREADY_REDEEMED",
+    ]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_troubleshooting_covers_slice_7_5_codes(docs):
+    """Slice 7.5 install-time envelopes must be in TROUBLESHOOTING."""
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in [
+        "SETTINGS_MALFORMED",
+        "PERMISSIONS_WILDCARD_OVERRIDE",
+    ]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_xdelete_documented_everywhere(docs):
+    """`/xdelete` is the new Slice 7.5 slash command. Must appear in every
+    user-facing doc surface (README, CLAUDE.md, TROUBLESHOOTING, CHANGELOG,
+    xhelp.md).
+    """
+    for name, content in docs.items():
+        assert "/xdelete" in content, f"{name} doesn't mention /xdelete"
 
 
 def test_inline_overrides_documented_in_xhelp(docs):
