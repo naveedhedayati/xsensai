@@ -2,6 +2,45 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.1.1] - 2026-04-29
+
+Hot-fix surfaced by manual QA pass. Brings cron exit-code behavior into
+compliance with the CLAUDE.md spec ("Exit codes: 0 full / 0 no-new / 1
+partial / 2 fatal"). Pre-fix, every cron run that found zero new bookmarks
+since the last sync exited 2 — the success info `[INFO/SYNC_DONE]` got
+written into `heartbeat.last_error` and `consecutive_cron_failures`
+climbed toward the banner threshold even on healthy no-op runs.
+
+### Fixed
+
+- **`headless.run()` now correctly maps `status="empty"` to exit 0** with
+  `finalize_run(success=True)` — heartbeat resets `consecutive_cron_failures`,
+  `last_error` stays `null`, no commit/push (corpus unchanged), stderr emits
+  `[INFO/CRON_NO_NEW_BOOKMARKS]`. The `status != "ok"` branch that previously
+  swallowed `"empty"` is unchanged for genuine failures.
+  ([src/xsensai/entrypoints/headless.py](src/xsensai/entrypoints/headless.py))
+
+### Added
+
+- **Regression test** `test_run_empty_status_returns_zero_and_resets_failure_counter`
+  asserts: `rc == 0`, `finalize_run` called with `success=True`/`n_new_cards=0`,
+  `INFO/SYNC_DONE` does NOT bleed into stderr.
+  ([tests/test_entrypoints_headless.py](tests/test_entrypoints_headless.py))
+
+### Internal
+
+- Live verification on cron run [25131162287](https://github.com/naveedhedayati/xsensai/actions/runs/25131162287):
+  exit 0, `last_success` populated, `consecutive_cron_failures: 0`,
+  `last_error: null` — every invariant the bug violated.
+- 5 P0/P1/P2 TODOs filed during the same QA pass; the cron token-rotation
+  gap (also P0) is the next-most-impactful fix and tracked in
+  [TODOS.md](TODOS.md).
+
+### For contributors
+
+Test count: 740 → 741. No behavior change for users running with new
+bookmarks every cycle; only fixes the no-new-bookmarks false-failure path.
+
 ## [0.9.1.0] - 2026-04-29
 
 Slice 7.5.1 — `user_confirmed` shim removal. Closes the v0.8.0.0 → v0.9.0.0

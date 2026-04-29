@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 9 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 7.5.1 (v0.9.1.0) — removes the one-release legacy `user_confirmed: bool` shim from `delete_bookmark`/`restore_bookmark`. Calls passing the kwarg now `TypeError`; only the 2-call confirmation-nonce flow (or the `XSENSAI_DESTRUCTIVE_BYPASS` env-bypass for scripted maintenance) is accepted. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 7.5.1 + v0.9.1.1 hot-fix — cron `headless.run()` now treats `status="empty"` as success per spec (no-new-bookmarks runs no longer false-fail with exit 2 + bogus heartbeat error). Surfaced during a manual QA pass; verified live. The Slice 7.5.1 contract change still stands: stale `delete_bookmark`/`restore_bookmark` calls passing `user_confirmed=` raise `TypeError`; only the 2-call confirmation-nonce flow (or `XSENSAI_DESTRUCTIVE_BYPASS=1` for scripted maintenance) is accepted. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 
