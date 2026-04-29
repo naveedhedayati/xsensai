@@ -25,6 +25,7 @@ by component, then priority).
 5. **Slice 4** — XDK sync + `/xsync` + `/xextract` + setup_oauth + smart-default extraction + git plumbing. **Shipped (v0.5.0.0).**
 6. **Slice 5** — GitHub Actions cron + git push + cost ceiling + cross-host conflict resolution + lazy-extract on read in `/xfind` (Spike #10 promoted from polish to load-bearing) + heartbeat instrumentation + `/xhelp` cron banner. **Shipped (v0.6.0.0).**
 7. **Slice 6** — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` + `deleted_at` + invariant validator) + MCP-only `delete_bookmark`/`restore_bookmark` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver (logs candidate; fail-loud stays primary) + guided setup wizard. v1 adapter retained 1 release as soft-landing. **Shipped (v0.7.0.0).**
+8. **Slice 7** — confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow). Replaces Slice 6's host-attestable `user_confirmed: bool` with a server-issued 8-char base32 nonce that the user echoes. Tombstone-on-redeem so error codes are derivable. One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance. /xdelete slash command deferred to follow-up (Slice 7.5+) to keep the security release scope-clean per dual-voice consensus. **Shipped (v0.8.0.0).**
 
 ## Slice 1 — what works
 
@@ -263,12 +264,86 @@ review report appended).
   byte-exact rollback (happy + corrupt-line skip), shadow log
   retry-idempotency, mutual-exclusion CLI contract, error envelope
   format.
-- **Known limitation (Slice 6)**: `user_confirmed: bool` on
-  `delete_bookmark` and `restore_bookmark` is host-attestable, not
-  user-attestable — the host LLM sets it. Prompt-injection from card
-  body could trick the host into invoking with `user_confirmed=True`
-  without explicit user authorization. Slice 7 will add a confirmation
-  nonce/handshake. Documented in TROUBLESHOOTING.md.
+- **Known limitation (Slice 6, RESOLVED in Slice 7)**: `user_confirmed: bool` on
+  `delete_bookmark` and `restore_bookmark` was host-attestable, not
+  user-attestable — the host LLM set it. Slice 7 replaces with a 2-call
+  confirmation nonce/handshake. See Slice 7 section below.
+
+## Slice 7 — what works
+
+Slice 7 ships the confirmation nonce/handshake on destructive MCP tools.
+Plan + dual-voice review at
+`~/.claude/plans/vigilant-handshaking-magpie.md` (CEO + Eng + DX phases).
+Both Codex and Claude subagent reviews independently flagged 6/6 CEO
+dimensions and pushed the design from a 3-call dance to a cleaner
+2-call flow at the final gate.
+
+- **`delete_bookmark` and `restore_bookmark` 2-call flow**
+  ([src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py)):
+  - First call: `delete_bookmark(id)` (no nonce) → returns `[NONCE_REQUIRED]`
+    envelope with `<<<NONCE: ABCD-EFGH>>>` in `rendered_message`. Host
+    displays verbatim; user echoes the 8-character code (case-insensitive,
+    hyphens optional).
+  - Second call: `delete_bookmark(id, confirmation_nonce=<echoed>)` →
+    server redeems and applies. Always consumes the nonce on redeem,
+    regardless of subsequent op outcome (LOCK_HELD, v1 refusal,
+    already-deleted no-op all consume — single rule, no special cases).
+- **`xsensai.mcp_server.nonce_store`**
+  ([src/xsensai/mcp_server/nonce_store.py](src/xsensai/mcp_server/nonce_store.py)):
+  in-memory `IssuedNonce` registry with `time.monotonic()` TTL (90s,
+  immune to wall-clock NTP corrections), tombstone-on-redeem (record
+  stays with `redeemed_at` set so `[NONCE_ALREADY_REDEEMED]` is
+  distinguishable from `[NONCE_INVALID]`), `threading.Lock`-protected,
+  opportunistic GC, `NonceStore.reset()` for test isolation.
+- **5 new error envelopes** (all retryable):
+  `NONCE_REQUIRED` (first-call challenge), `NONCE_INVALID`,
+  `NONCE_EXPIRED`, `NONCE_OPERATION_MISMATCH`, `NONCE_ALREADY_REDEEMED`.
+  All `next_action` text uses slash-command-first wording ("Re-run
+  /xrestore for a new code") with `(see TROUBLESHOOTING.md#nonce-...)`
+  anchors.
+- **Legacy-kwarg shim**: `delete_bookmark(id, user_confirmed=True)`
+  still callable for one release; routes to `[NONCE_REQUIRED]` envelope
+  with deprecation text. Removed in v0.9 once any stale Claude Code
+  sessions have refreshed.
+- **`XSENSAI_DESTRUCTIVE_BYPASS=1` env var** for scripted maintenance
+  (cron-side bulk cleanup, test fixtures, recovery scripts). Read at
+  call time by the MCP server process so the host LLM cannot inject it.
+  Loud audit-log warning emitted on every bypassed call.
+- **Updated `commands/xrestore.md`**: section 3 rewritten for the 2-call
+  flow with explicit "type the 8 characters between the markers"
+  user-facing instruction. Replaces the Slice 6 `y` confirmation token.
+- **`/xdelete` slash command DEFERRED** to a follow-up slice (7.5+) —
+  both /autoplan CEO voices and the eng subagent flagged shipping it
+  in the same release as the contract change as scope contamination.
+- **Tests** (+49 new, 707 total):
+  - `test_nonce_store.py` (27 unit tests): all 5 error literals in
+    `ErrorCode`; `time.monotonic` clock-jump immunity; concurrent issue
+    race; secrets.token_bytes entropy regression; tombstone-on-redeem
+    distinguishability; reset() isolation; GC bounded; bypass env var.
+  - `test_destructive_token_flow.py` (22 integration tests): 2-call
+    happy paths; legacy kwarg shim; always-consume-on-redeem (v1,
+    no-op, all paths); restart-during-flow; operation-mismatch via
+    tool; log redaction (full nonce never in caplog); atomic markdown
+    gate (commands/xrestore.md has no stale `user_confirmed=True`
+    references); Q9 cron-isolation regression (asserts sync/service.py
+    + entrypoints/headless.py never reference `delete_bookmark`/
+    `restore_bookmark`).
+  - `test_tombstone.py` updated: autouse `XSENSAI_DESTRUCTIVE_BYPASS=1`
+    fixture so existing `user_confirmed=True` call sites continue to
+    work; the two confirmation-guard tests rewritten for the new
+    nonce-required behavior.
+- **Q9 cron VERIFIED clean** by both /autoplan eng voices via
+  `rg "delete_bookmark|restore_bookmark"` against `src/xsensai/sync/`
+  and `src/xsensai/entrypoints/` — zero matches. Cron never invokes
+  destructive MCP tools, so the nonce design is safe for headless
+  paths.
+- **Honest framing in TROUBLESHOOTING.md**: the handshake raises
+  social-engineering effort by ~1 step; the user remains the only
+  true boundary. The same host LLM can mint and redeem in one tool-use
+  chain — for genuine cryptographic gating, configure Claude Code's
+  per-tool permission prompt on
+  `mcp__xsensai__delete_bookmark` and `mcp__xsensai__restore_bookmark`
+  in `.claude/settings.json`.
 
 ## Slice 1 — config
 
@@ -354,6 +429,19 @@ Append to your question:
 - `challenge` — run an extra retrieval pass that hunts for a dissenting card
 
 Override fuzzy match: if you say `dissent`, `recency`, `web off`, etc., `/xask`'s service detects the canonical phrase, applies the override, and prepends a one-line note to your output mapping the fuzzy phrase to the canonical token.
+
+## Slice 7 — config
+
+- **`XSENSAI_DESTRUCTIVE_BYPASS`** (default unset) — set `1` / `true`
+  / `yes` in the parent shell that spawns the MCP server to skip the
+  destructive-tool nonce handshake. For scripted maintenance only —
+  loud audit-log warning emitted on every bypassed call. The env var
+  is read at call time by the MCP server process; the host LLM cannot
+  inject it.
+- **Nonce TTL: 90 seconds** (`NONCE_TTL_SECONDS` in
+  [src/xsensai/mcp_server/nonce_store.py](src/xsensai/mcp_server/nonce_store.py)).
+  Empirically calibrated: ~5s to read the code + ~5s to type + buffer
+  for distraction. Brute-force surface is negligible at 40 bits / 90s.
 
 ## Rules of the road
 

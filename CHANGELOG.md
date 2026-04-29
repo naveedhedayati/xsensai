@@ -2,6 +2,103 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.8.0.0] - 2026-04-28
+
+Slice 7 — confirmation nonce/handshake on destructive MCP tools. Closes
+the documented Slice 6 known limitation that `user_confirmed: bool` on
+`delete_bookmark` and `restore_bookmark` was host-attestable (set by
+the LLM, not the user). Plan + dual-voice review at
+`~/.claude/plans/vigilant-handshaking-magpie.md`. CEO + Eng + DX phases
+ran with both Codex and Claude subagent voices; six-voice convergent
+finding pushed the design from a 3-call dance (separate
+`request_destructive_token` tool) to a cleaner 2-call flow.
+
+### Breaking changes
+
+- **`delete_bookmark` and `restore_bookmark` MCP tool signatures changed.**
+  The Slice 6 `user_confirmed: bool` kwarg is replaced by a 2-call
+  handshake: first call returns `[NONCE_REQUIRED]` with a one-time
+  8-character code; user echoes; second call passes `confirmation_nonce`
+  to redeem.
+- **One-release migration shim:** the legacy `user_confirmed` kwarg is
+  still accepted in v0.8.x but routes to a `[NONCE_REQUIRED]` envelope
+  with deprecation text. Removed in v0.9.
+
+### Added
+
+- **`xsensai.mcp_server.nonce_store`** — in-memory `IssuedNonce` registry
+  with `time.monotonic()`-based TTL (90s), tombstone-on-redeem (the
+  record stays with `redeemed_at` set so `[NONCE_ALREADY_REDEEMED]` is
+  distinguishable from `[NONCE_INVALID]`), `threading.Lock`-protected,
+  opportunistic GC, `reset()` for test isolation.
+- **5 new error envelopes** (all retryable, all in
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md)):
+  - `[NONCE_REQUIRED]` — first-call challenge envelope; embeds the
+    issued code in `<<<NONCE: ABCD-EFGH>>>` markers in `rendered_message`
+  - `[NONCE_INVALID]` — typo or unknown code
+  - `[NONCE_EXPIRED]` — 90s window passed
+  - `[NONCE_OPERATION_MISMATCH]` — code matches a different (op, target)
+  - `[NONCE_ALREADY_REDEEMED]` — code already used (single-use)
+- **`XSENSAI_DESTRUCTIVE_BYPASS=1` env var** — skips the handshake for
+  scripted maintenance. Read at call time by the MCP server process so
+  the host LLM cannot inject it. Loud audit-log warning emitted on
+  every bypassed call.
+- **Guard-levels table** in `commands/xhelp.md` — documents the WHY
+  behind the dual pattern (soft `user_confirmed: bool` for paste/note/pin
+  vs strong nonce for delete/restore).
+- **Tests** (+49 new, 707 total): `test_nonce_store.py` (27 unit tests
+  including `time.monotonic` clock-jump immunity, concurrent-issue race,
+  `secrets.token_bytes` entropy regression, all 5 error literals
+  present in `ErrorCode`); `test_destructive_token_flow.py` (22
+  integration tests including 2-call happy paths, legacy kwarg shim,
+  always-consume-on-redeem rule, restart-during-flow,
+  operation-mismatch via tool, log redaction, atomic markdown gate,
+  Q9 cron-isolation regression).
+
+### Changed
+
+- **`commands/xrestore.md`** — section 3 rewritten for the 2-call flow
+  with explicit "type the 8 characters between the markers" instruction
+  for first-time users. Deprecates `y` confirmation token from Slice 6.
+- **`tests/test_tombstone.py`** — autouse `XSENSAI_DESTRUCTIVE_BYPASS=1`
+  fixture so existing `user_confirmed=True` call sites continue to work
+  via the documented bypass path. `test_delete_requires_user_confirmed`
+  / `test_restore_requires_user_confirmed` rewritten to test the new
+  nonce-required behavior with the bypass off.
+- **TROUBLESHOOTING.md** — replaced "Known limitation: user_confirmed
+  is host-attestable" section with "Resolved (Slice 7)" section
+  documenting the handshake honestly (raises social-engineering bar by
+  one step; user remains the only true boundary; for cryptographic
+  gating use Claude Code permission prompts).
+
+### Q9 (cron) verified clean
+
+Both /autoplan eng voices ran `rg "delete_bookmark|restore_bookmark"`
+against `src/xsensai/sync/` and `src/xsensai/entrypoints/` — zero
+matches. Cron never invokes destructive MCP tools, so the nonce design
+is safe for headless paths. Regression test in
+`tests/test_destructive_token_flow.py::TestCronIsolation` keeps a
+future maintainer honest.
+
+### Deferred to Slice 7.5+
+
+- **`/xdelete` slash command** — both /autoplan CEO voices and the eng
+  subagent flagged shipping it in the same release as the contract
+  change as scope contamination. Deferred to a tiny follow-up PR
+  (Slice 7.5) once Slice 7 has been in production for a few days.
+- **Promote union merge from shadow → primary** (gate: ≥3 real
+  conflicts with zero manual overrides observed).
+- **Delete v1_adapter** (gate: 14 days zero v1 cards observed).
+
+### Known limitation (Slice 7)
+
+The handshake is NOT a cryptographic user-attestation boundary. The
+same host LLM can mint and redeem the nonce in one tool-use chain —
+documented honestly in TROUBLESHOOTING.md "Resolved (Slice 7)". For
+true user-origin enforcement, configure Claude Code's per-tool
+permission prompt on `mcp__xsensai__delete_bookmark` and
+`mcp__xsensai__restore_bookmark` in `.claude/settings.json`.
+
 ## [0.7.0.0] - 2026-04-28
 
 Slice 6 — v1→v2 migration with byte-exact rollback, tombstone schema,

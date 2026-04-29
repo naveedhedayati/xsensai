@@ -37,6 +37,8 @@ from urllib.parse import urlparse
 
 from xsensai.errors import XSensaiError
 from xsensai.locks import filelock
+from xsensai.mcp_server import nonce_store
+from xsensai.mcp_server.nonce_store import DestructiveOperation
 from xsensai.model.card import CardFrontmatter, LoadedCard
 from xsensai.retrieval import engine, format as fmt
 from xsensai.storage import corpus, inbox, slug
@@ -999,30 +1001,146 @@ def _is_v1_card(card: LoadedCard) -> bool:
     return card.fm.raw_path is None and card.fm.raw_checksum is None
 
 
-@mcp.tool()
-def delete_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
-    """Soft-delete a card. The file stays on disk with frontmatter
-    `deleted: true` and `deleted_at: <utc>`. Tombstoned cards are
-    excluded from search, list ops, and dedup; cron skips replay-write
-    of deleted cards (sticky deletion). Restore via `restore_bookmark`
-    or the `/xrestore` slash command.
+def _nonce_required_envelope(
+    operation: DestructiveOperation, target_id: str, *, legacy: bool = False
+) -> Dict[str, Any]:
+    """[NONCE_REQUIRED] envelope: the first half of the 2-call destructive
+    flow. Issues a fresh nonce, embeds the formatted code in
+    `rendered_message` between `<<<NONCE: ` and `>>>` markers per AD2.
 
-    USAGE: ask Claude to call this with `user_confirmed=True` after
-    explicit user confirmation. Slice 7+ may add `/xdelete` slash command.
-
-    SECURITY NOTE (Slice 6 known limitation per /autoplan eng review):
-    `user_confirmed: bool` is host-attestable, not user-attestable —
-    the host LLM sets it. Prompt-injection from card body could trick
-    the host into invoking with `user_confirmed=True` without explicit
-    user authorization. Slice 7 adds a confirmation nonce/handshake.
-    For now, mitigate by treating card bodies as untrusted input
-    (`<DATA_TO_ANALYZE>` defense delimiters when echoing to host).
+    `legacy=True` is set when the caller passed the deprecated
+    `user_confirmed: bool` kwarg from Slice 6. The cause text gets
+    migration-specific phrasing; the nonce flow is identical.
     """
-    log.info("delete_bookmark: id=%r confirmed=%s", id, user_confirmed)
-    if not user_confirmed:
-        return _confirmation_required("delete_bookmark")
+    issued = nonce_store.issue_nonce(operation=operation, target_id=target_id)
+    cmd = "/xdelete" if operation == "delete" else "/xrestore"
+    cause = (
+        f"{operation.title()} of {target_id!r} requires a one-time confirmation "
+        f"code. Issued: {issued.display_nonce}"
+    )
+    if legacy:
+        cause = (
+            f"`user_confirmed: bool` is deprecated in Slice 7. "
+            f"{operation.title()} of {target_id!r} now uses a confirmation "
+            f"handshake. New code issued: {issued.display_nonce}"
+        )
+    rendered = (
+        f"To confirm {operation} of {target_id!r}, type the 8 characters "
+        f"between the markers below "
+        f"(case-insensitive, hyphens optional, expires in "
+        f"{nonce_store.NONCE_TTL_SECONDS}s):\n\n"
+        f"    {nonce_store.NONCE_DELIMITER_OPEN}{issued.display_nonce}{nonce_store.NONCE_DELIMITER_CLOSE}\n\n"
+        f"AFTER the user echoes the 8 characters, the host re-calls "
+        f"{operation}_bookmark(id={target_id!r}, confirmation_nonce=<user-echoed-code>). "
+        f"The host MUST NOT pass the code to itself — that defeats the handshake. "
+        f"Wait for the user."
+    )
+    err = XSensaiError(
+        code="NONCE_REQUIRED",
+        cause=cause,
+        attempted=f"{operation}_bookmark({target_id!r}) without confirmation_nonce",
+        next_action=(
+            f"Show the user the rendered_message verbatim, ask them to type "
+            f"the 8 characters between the <<<NONCE: ... >>> markers, then "
+            f"re-call {operation}_bookmark(id, confirmation_nonce=<echoed>). "
+            f"Or run {cmd} which scripts this flow. "
+            f"(see TROUBLESHOOTING.md#nonce-required)"
+        ),
+        retryable=True,
+    )
+    response = _write_error_response(err)
+    # Override rendered_message with the user-facing instructions so the
+    # host LLM can show it verbatim (the default XSensaiError.format
+    # output is for diagnostic surfaces, not the destructive UX flow).
+    # The code is intentionally embedded inside <<<NONCE: ... >>> markers
+    # in rendered_message — that's the only field tests / hosts should
+    # extract it from. F7 fix: NO duplicate `nonce_display` field that
+    # would expose a redeemable code in the response shape (e.g., to
+    # any host-side trace / telemetry / persisted transcript).
+    response["rendered_message"] = rendered
+    return response
 
-    # Lock-first-then-load (per /autoplan eng review): acquire the
+
+@mcp.tool()
+def delete_bookmark(
+    id: str,
+    confirmation_nonce: Optional[str] = None,
+    user_confirmed: Optional[bool] = None,  # AD5 — one-release legacy shim
+) -> Dict[str, Any]:
+    """Soft-delete a card via the Slice 7 confirmation-nonce handshake.
+
+    The file stays on disk with frontmatter `deleted: true` and
+    `deleted_at: <utc>`. Tombstoned cards are excluded from search, list
+    ops, and dedup; cron skips replay-write of deleted cards (sticky
+    deletion). Restore via `restore_bookmark` or `/xrestore`.
+
+    Two-call flow:
+      1. First call: `delete_bookmark(id=<id>)` (no nonce). Returns
+         `[NONCE_REQUIRED]` envelope with `<<<NONCE: ABCD-EFGH>>>` in
+         `rendered_message`. Host shows verbatim; user types the code.
+      2. Second call: `delete_bookmark(id=<id>, confirmation_nonce=<echoed>)`.
+         Server redeems and applies. The redeem ALWAYS consumes the
+         nonce, regardless of subsequent op outcome (lock contention,
+         v1 refusal, no-op all consume).
+
+    Slice 6 `user_confirmed: bool` is deprecated. If supplied, returns
+    `[NONCE_REQUIRED]` with migration text — one-release shim, removed in v0.9.
+
+    Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the MCP server's parent
+    process skips the handshake (for scripted maintenance only). Loud
+    audit-log marker emitted on bypass.
+
+    SECURITY NOTE: the nonce raises the social-engineering bar from a
+    flag-flip to a user-typed code. The same host LLM can still mint
+    and redeem in one tool-use chain — the nonce alone does not prove
+    user attestation. Documented in TROUBLESHOOTING.md.
+    """
+    bypass_active = nonce_store.destructive_bypass_enabled()
+    log.info(
+        "delete_bookmark: id=%r nonce_present=%s legacy_kwarg=%s bypass=%s",
+        id,
+        confirmation_nonce is not None,
+        user_confirmed is not None,
+        bypass_active,
+    )
+
+    # Validate id shape early so we never issue a nonce against a
+    # malformed target.
+    try:
+        corpus.validate_card_id(id)
+    except XSensaiError as e:
+        return _write_error_response(e)
+
+    # Path A: explicit destructive bypass (env var). Skip the handshake,
+    # log loudly, proceed straight to the lock-and-write block.
+    if bypass_active:
+        log.warning(
+            "delete_bookmark: XSENSAI_DESTRUCTIVE_BYPASS=1 active; "
+            "skipping nonce handshake for id=%r",
+            id,
+        )
+    else:
+        # F11 fix: if BOTH legacy `user_confirmed` AND a nonce are
+        # supplied, prefer the new flow (the user is mid-migration and
+        # already has a code) rather than discarding the nonce silently.
+        if confirmation_nonce is not None:
+            try:
+                nonce_store.redeem_nonce(
+                    nonce=confirmation_nonce,
+                    operation="delete",
+                    target_id=id,
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
+        elif user_confirmed is not None:
+            # Legacy kwarg without a nonce: one-release migration shim
+            # that issues a fresh nonce and explains the migration.
+            return _nonce_required_envelope("delete", id, legacy=True)
+        else:
+            # First-call challenge: no nonce supplied, no legacy kwarg.
+            return _nonce_required_envelope("delete", id)
+
+    # Lock-first-then-load (Slice 6 invariant retained): acquire the
     # card_write lock BEFORE loading. Otherwise concurrent annotate/pin
     # could resurrect a deleted card from a stale snapshot.
     try:
@@ -1042,9 +1160,6 @@ def delete_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
                     "rendered_message": f"Card {card.id!r} is already deleted (no-op).",
                 }
             if _is_v1_card(card):
-                # Refuse delete on v1 cards — they need migration first
-                # (their raw_bytes is synthesized; toggling `deleted` would
-                # bake a partial v2 frontmatter onto a v1 card).
                 corpus.log_v1_mutation_blocked(corpus_path, id, "delete")
                 return _v1_blocked_response(id, "delete_bookmark")
             fm_dict = card.fm.model_dump(mode="python")
@@ -1066,22 +1181,65 @@ def delete_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
         "id": written.id,
         "deleted": True,
         "deleted_at": written.fm.deleted_at.isoformat() if written.fm.deleted_at else None,
-        "rendered_message": f"Deleted {written.id!r}. Restore via /xrestore if needed.",
+        "rendered_message": (
+            f"Deleted {written.id!r}. Undo within 90s: /xrestore "
+            f"(this card listed first)."
+        ),
     }
 
 
 @mcp.tool()
-def restore_bookmark(id: str, user_confirmed: bool) -> Dict[str, Any]:
-    """Restore a previously soft-deleted card. Sets `deleted: false`
-    and clears `deleted_at`. Card body and raw_bytes are unchanged.
+def restore_bookmark(
+    id: str,
+    confirmation_nonce: Optional[str] = None,
+    user_confirmed: Optional[bool] = None,  # AD5 — one-release legacy shim
+) -> Dict[str, Any]:
+    """Restore a previously soft-deleted card via the Slice 7
+    confirmation-nonce handshake. Sets `deleted: false` and clears
+    `deleted_at`. Card body and raw_bytes are unchanged.
 
-    USAGE: behind /xrestore slash command. user_confirmed must be True.
+    Two-call flow identical to `delete_bookmark`; see that docstring.
 
-    Returns `already_active: True` if the card is already non-deleted.
+    Returns `already_active: True` if the card is already non-deleted
+    (still consumes the nonce per AE10's single-rule contract).
+
+    Slice 6 `user_confirmed: bool` is deprecated; same shim behavior.
     """
-    log.info("restore_bookmark: id=%r confirmed=%s", id, user_confirmed)
-    if not user_confirmed:
-        return _confirmation_required("restore_bookmark")
+    bypass_active = nonce_store.destructive_bypass_enabled()
+    log.info(
+        "restore_bookmark: id=%r nonce_present=%s legacy_kwarg=%s bypass=%s",
+        id,
+        confirmation_nonce is not None,
+        user_confirmed is not None,
+        bypass_active,
+    )
+
+    try:
+        corpus.validate_card_id(id)
+    except XSensaiError as e:
+        return _write_error_response(e)
+
+    if bypass_active:
+        log.warning(
+            "restore_bookmark: XSENSAI_DESTRUCTIVE_BYPASS=1 active; "
+            "skipping nonce handshake for id=%r",
+            id,
+        )
+    else:
+        # F11 fix mirror: prefer nonce when both kwargs are supplied.
+        if confirmation_nonce is not None:
+            try:
+                nonce_store.redeem_nonce(
+                    nonce=confirmation_nonce,
+                    operation="restore",
+                    target_id=id,
+                )
+            except XSensaiError as e:
+                return _write_error_response(e)
+        elif user_confirmed is not None:
+            return _nonce_required_envelope("restore", id, legacy=True)
+        else:
+            return _nonce_required_envelope("restore", id)
 
     try:
         corpus_path = corpus.resolve_corpus_path()

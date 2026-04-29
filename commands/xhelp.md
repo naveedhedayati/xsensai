@@ -26,7 +26,7 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `/xask` | Thinking session, live — corpus + last30days web fork + grounded synthesis with `[B]`/`[P]` refs. |
 | `/xsync` | Ingest new bookmarks from X via XDK. Smart-default extraction (inline ≤5, deferred >5). |
 | `/xextract` | Backlog drain: bulk-extract `retrieval_summary` + `retrieval_tags` for cards still `extraction_pending: true` (Slice 5 lazy-extract handles top-3 on /xfind, but bulk drain is faster + ensures non-queried cards get extracted). |
-| `/xrestore` | Restore a soft-deleted card (Slice 6). Lists recently-deleted, pick by number, confirm. To **delete** a card: ask Claude to call `delete_bookmark(id, user_confirmed=True)`. A `/xdelete` shortcut ships in Slice 7+ once delete semantics stabilize. |
+| `/xrestore` | Restore a soft-deleted card. Lists recently-deleted, pick by number, then confirm via the Slice 7 nonce/handshake (server prints an 8-character code, you echo it). To **delete** a card today: ask Claude to call `delete_bookmark(id)` and follow the same nonce flow. A `/xdelete` shortcut ships in Slice 7.5+ once the contract has been live for a release. |
 
 ### Planned
 
@@ -57,8 +57,8 @@ Personal X bookmark retrieval skill — MCP server + slash commands for Claude.
 | `get_review_cursor()` | Read the /xnote review walk cursor (UC10). |
 | `set_review_cursor(last_card_id?)` | Update or clear the /xnote review walk cursor (UC10). |
 | `xask_capabilities()` | Read-only deploy-status helper for `/xask` (Slice 3). |
-| `delete_bookmark(id, user_confirmed)` | **Slice 6** — soft-delete a card. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). |
-| `restore_bookmark(id, user_confirmed)` | **Slice 6** — un-delete a tombstoned card. |
+| `delete_bookmark(id, confirmation_nonce?)` | **Slice 7** — soft-delete a card via 2-call nonce/handshake. First call (no nonce) returns `[NONCE_REQUIRED]` with a one-time 8-char code; user echoes; second call redeems. Tombstoned cards stay on disk but are excluded from search/list/dedup. Cron skips replay-write of deleted cards (sticky deletion). Legacy `user_confirmed: bool` accepted for one release with migration message; removed in v0.9. Bypass: `XSENSAI_DESTRUCTIVE_BYPASS=1` in the parent shell skips the handshake for scripted maintenance. |
+| `restore_bookmark(id, confirmation_nonce?)` | **Slice 7** — un-delete a tombstoned card; same 2-call nonce/handshake as `delete_bookmark`. |
 | `list_deleted(limit?)` | **Slice 6** — list recently-deleted cards, newest-first (read-only). |
 
 ## Inline `/xfind` overrides
@@ -195,6 +195,41 @@ gh workflow run sync.yml
 `card_write` lock (via `fcntl.flock` + UUID fencing token) for the duration
 of each individual write. `/xsync` and `/xextract` acquire/release per
 card to keep `/xpaste` from blocking on long backlogs.
+
+### Guard levels (Slice 7)
+
+x-sensai has two confirmation patterns. Same `card_write` lock either way;
+the difference is what gates the host LLM from invoking the tool.
+
+| Tool | Guard | Reason |
+|---|---|---|
+| `paste_bookmark` (`/xpaste`) | **Soft** — `user_confirmed: bool` | Recoverable: re-paste or edit |
+| `annotate_card` (`/xnote`) | **Soft** — `user_confirmed: bool` | Recoverable: edit `## Notes` block |
+| `set_pin` (`/xpin`) | **Soft** — `user_confirmed: bool` | Recoverable: toggle back |
+| `delete_bookmark` | **Strong** — confirmation nonce/handshake | Destructive transition; requires explicit user-typed code |
+| `restore_bookmark` (`/xrestore`) | **Strong** — confirmation nonce/handshake | Destructive transition; requires explicit user-typed code |
+
+**Soft guards** are accident-guards — they protect against the host LLM
+firing a tool in the wrong context (e.g., reading a card body that
+mentions paste). They are NOT a security boundary; the host sets the bool.
+
+**Strong guards** are the 2-call handshake. The host calls `delete_bookmark(id)`
+without a nonce; server returns `[NONCE_REQUIRED]` with a one-time
+8-character code in `<<<NONCE: ABCD-EFGH>>>` markers. User echoes the
+code; host calls `delete_bookmark(id, confirmation_nonce=...)` to redeem.
+Honest framing: this raises social-engineering effort by one step; the
+user remains the only true boundary. For cryptographic gating, configure
+Claude Code's per-tool permission prompt in `.claude/settings.json`.
+
+**Why two patterns?** Card mutations are reversible — you can re-edit a
+note or unpin a card with one slash command. Deletes aren't reversible
+without an explicit `/xrestore`, and `/xrestore` itself moves state.
+Different blast radius, different gate. See TROUBLESHOOTING.md
+"Resolved (Slice 7)" section for full envelope details.
+
+**Power-user bypass.** `XSENSAI_DESTRUCTIVE_BYPASS=1` in the MCP server's
+parent shell skips the handshake. For scripted maintenance only — the
+env var is read at call time so the host LLM cannot inject it.
 
 Reindex (`qmd update`) holds the `index_rebuild` lock cross-process —
 `/xsync` finalize and `/xfind`/`/xask` read-side reindex serialize on it.

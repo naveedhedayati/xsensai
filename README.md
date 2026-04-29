@@ -4,7 +4,7 @@ Personal X bookmark retrieval skill for Claude. MCP server + 9 conversational sl
 
 **Spec / source of truth:** `~/Documents/Vault/02_projects/x-sensai/v2-build-spec.md`
 
-**Current slice:** Slice 6 — v1→v2 migration with byte-exact rollback + tombstone schema (`deleted` / `deleted_at` invariant) + MCP `delete_bookmark` / `restore_bookmark` / `list_deleted` + `/xrestore` slash command + shadow-mode union-frontmatter merge driver + guided setup wizard. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
+**Current slice:** Slice 7 — confirmation nonce/handshake on destructive MCP tools (`delete_bookmark` + `restore_bookmark` 2-call flow replacing Slice 6 host-attestable `user_confirmed: bool`). One-release legacy-kwarg shim + `XSENSAI_DESTRUCTIVE_BYPASS` env var for scripted maintenance. See [CHANGELOG.md](./CHANGELOG.md) for what shipped in each release.
 
 ## Layout
 

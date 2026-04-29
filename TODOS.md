@@ -196,19 +196,64 @@ finding). 95 new tests; all 5 sub-items shipped; 4 spikes ran.
 **Description:** Delete `src/xsensai/storage/v1_adapter.py`, remove `_is_v1_card` + `_v1_blocked_response` + `V1_MUTATION_BLOCKED` from `src/xsensai/mcp_server/server.py` and `src/xsensai/errors.py`, update CLAUDE.md build sequence.
 **Files:** [src/xsensai/storage/v1_adapter.py](src/xsensai/storage/v1_adapter.py), [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), [src/xsensai/errors.py](src/xsensai/errors.py).
 
-### Slice 7+: `/xdelete` slash command
+### ~~Slice 7+: Confirmation nonce/handshake for destructive tools~~ — CLOSED
 
-**Priority:** P3 (after delete semantics stabilize)
-**Origin:** Slice 6 /autoplan premise-gate decision. MCP tool ships in Slice 6; slash command deferred to reduce drift + test surface while semantics settle.
-**Description:** Add `commands/xdelete.md` mirroring `/xpin` pattern. Single prompt → search/disambiguate → confirm → call `delete_bookmark(id, user_confirmed=True)`. Update `commands/xhelp.md` to remove the "MCP-only" caveat once shipped.
-**Files:** [commands/xdelete.md](commands/xdelete.md) (new), [commands/xhelp.md](commands/xhelp.md).
+**Status:** Done in Slice 7 (v0.8.0.0). 2-call flow on `delete_bookmark` /
+`restore_bookmark` (host calls without nonce → server returns
+`[NONCE_REQUIRED]` envelope with `<<<NONCE: ABCD-EFGH>>>` in
+`rendered_message`; user echoes; host re-calls with `confirmation_nonce`).
+`xsensai.mcp_server.nonce_store` module with idempotent issue,
+tombstone-on-redeem, `time.monotonic` TTL (90s), `threading.Lock`,
+`reset()` for tests. 5 error envelopes (`NONCE_REQUIRED`, `INVALID`,
+`EXPIRED`, `OPERATION_MISMATCH`, `ALREADY_REDEEMED`). One-release
+`user_confirmed: bool` legacy shim. `XSENSAI_DESTRUCTIVE_BYPASS=1` env
+var for scripted maintenance. /xdelete slash command deferred to Slice
+7.5/8 (see below). Plan + dual-voice review at
+`~/.claude/plans/vigilant-handshaking-magpie.md`.
 
-### Slice 7+: Confirmation nonce/handshake for destructive tools
+### Slice 7.5+: `/xdelete` slash command
 
-**Priority:** P2 (security hardening)
-**Origin:** Slice 6 /autoplan eng-review. Both voices flagged `user_confirmed: bool` as host-attestable, not user-attestable — prompt-injection from card body could trick the host LLM into invoking `delete_bookmark(user_confirmed=True)` without explicit user authorization.
-**Description:** Two-call handshake. First call (e.g., `request_destructive_token(operation, target_id)`) returns a short-lived nonce visible to the user (e.g., printed in the conversation). User must explicitly echo the nonce; the destructive tool then takes a `confirmation_nonce` arg matched against the recent issuance. Supersedes `user_confirmed: bool` for `delete_bookmark` and `restore_bookmark`.
-**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), new module for nonce store.
+**Priority:** P3 (after Slice 7 nonce contract has been in production for
+a release).
+**Origin:** Slice 7 /autoplan + /review convergent recommendation. Both
+CEO voices and the eng subagent flagged shipping /xdelete in the same
+release as the destructive-contract change as scope contamination. Slice
+7 ships the contract; Slice 7.5 ships the UX.
+**Description:** Add `commands/xdelete.md` mirroring the updated
+`commands/xrestore.md` 2-call flow: search → pick → call
+`delete_bookmark(id)` → display `<<<NONCE: ABCD-EFGH>>>` block verbatim
+→ user echoes → call `delete_bookmark(id, confirmation_nonce=<echoed>)`.
+Update `commands/xhelp.md` to remove the "MCP-only" caveat once shipped.
+**Files:** [commands/xdelete.md](commands/xdelete.md) (new),
+[commands/xhelp.md](commands/xhelp.md).
+
+### Slice 7.5+: Remove legacy `user_confirmed` shim from delete/restore
+
+**Priority:** P3 (one release after Slice 7 ships, gated on telemetry).
+**Origin:** Slice 7 plan AD5 — the legacy `user_confirmed` kwarg shim
+on `delete_bookmark` and `restore_bookmark` is intentionally one-release.
+Removed in v0.9 once any stale Claude Code sessions have refreshed.
+**Description:** Drop the `user_confirmed: Optional[bool] = None` kwarg
+from both signatures. Update tests (currently use `XSENSAI_DESTRUCTIVE_BYPASS=1`
+autouse fixture, but keep that for non-handshake test paths). Verify no
+remaining call sites grep `user_confirmed.*delete_bookmark|restore_bookmark`.
+**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py),
+[tests/test_tombstone.py](tests/test_tombstone.py),
+[tests/test_destructive_token_flow.py](tests/test_destructive_token_flow.py).
+
+### Slice 7.5+: Telemetry-driven AE10 revisit
+
+**Priority:** P3 (gated on observed friction).
+**Origin:** Slice 7 /autoplan eng + DX dual-voice partial pushback.
+AE10 says "always consume nonce on redeem" (single rule, no special
+cases). Subagent argued for refunding on infrastructure errors
+(`LOCK_HELD`, `CORPUS_UNAVAILABLE`). Currently consume-on-everything;
+revisit if observed friction surfaces.
+**Description:** Add lightweight telemetry to count `LOCK_HELD` /
+`CORPUS_UNAVAILABLE` events that consumed a nonce. If count > 3/week,
+add a refund-on-infra-error path. Until then: stable single-rule
+contract.
+**Files:** [src/xsensai/mcp_server/nonce_store.py](src/xsensai/mcp_server/nonce_store.py).
 
 ### Slice 7+: Tri-lateral conflict resolution
 
