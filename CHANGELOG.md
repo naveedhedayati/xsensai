@@ -46,10 +46,10 @@ finding pushed the design from a 3-call dance (separate
 - **Guard-levels table** in `commands/xhelp.md` — documents the WHY
   behind the dual pattern (soft `user_confirmed: bool` for paste/note/pin
   vs strong nonce for delete/restore).
-- **Tests** (+45 new, 703 total): `test_nonce_store.py` (25 unit tests
+- **Tests** (+49 new, 707 total): `test_nonce_store.py` (27 unit tests
   including `time.monotonic` clock-jump immunity, concurrent-issue race,
   `secrets.token_bytes` entropy regression, all 5 error literals
-  present in `ErrorCode`); `test_destructive_token_flow.py` (20
+  present in `ErrorCode`); `test_destructive_token_flow.py` (22
   integration tests including 2-call happy paths, legacy kwarg shim,
   always-consume-on-redeem rule, restart-during-flow,
   operation-mismatch via tool, log redaction, atomic markdown gate,

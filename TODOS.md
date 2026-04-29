@@ -196,13 +196,6 @@ finding). 95 new tests; all 5 sub-items shipped; 4 spikes ran.
 **Description:** Delete `src/xsensai/storage/v1_adapter.py`, remove `_is_v1_card` + `_v1_blocked_response` + `V1_MUTATION_BLOCKED` from `src/xsensai/mcp_server/server.py` and `src/xsensai/errors.py`, update CLAUDE.md build sequence.
 **Files:** [src/xsensai/storage/v1_adapter.py](src/xsensai/storage/v1_adapter.py), [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py), [src/xsensai/errors.py](src/xsensai/errors.py).
 
-### Slice 7+: `/xdelete` slash command
-
-**Priority:** P3 (after delete semantics stabilize)
-**Origin:** Slice 6 /autoplan premise-gate decision. MCP tool ships in Slice 6; slash command deferred to reduce drift + test surface while semantics settle.
-**Description:** Add `commands/xdelete.md` mirroring `/xpin` pattern. Single prompt → search/disambiguate → confirm → call `delete_bookmark(id, user_confirmed=True)`. Update `commands/xhelp.md` to remove the "MCP-only" caveat once shipped.
-**Files:** [commands/xdelete.md](commands/xdelete.md) (new), [commands/xhelp.md](commands/xhelp.md).
-
 ### ~~Slice 7+: Confirmation nonce/handshake for destructive tools~~ — CLOSED
 
 **Status:** Done in Slice 7 (v0.8.0.0). 2-call flow on `delete_bookmark` /

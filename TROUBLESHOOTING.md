@@ -603,8 +603,11 @@ you `/xextract backlog` them.
 list, and dedup paths; the only legal mutation is restore.
 
 **Recover**:
-- If you want the card back, restore it: `/xrestore` slash command
-  picks from recently-deleted; or call `restore_bookmark(id, user_confirmed=true)`.
+- If you want the card back, restore it: `/xrestore` walks the Slice 7
+  2-call nonce flow (lists recently-deleted, picks by number, prints an
+  8-character confirmation code that you echo). For scripted recovery,
+  set `XSENSAI_DESTRUCTIVE_BYPASS=1` in the spawning shell and call
+  `restore_bookmark(id)` directly — see "Resolved (Slice 7)" below.
 - If you want a fresh card with the same content, use `/xpaste`.
 - If you didn't mean to delete this card, restore it first then audit
   recent activity in `~/.cache/xsensai/xsync-log.jsonl` (sync replay

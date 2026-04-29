@@ -315,12 +315,12 @@ dimensions and pushed the design from a 3-call dance to a cleaner
 - **`/xdelete` slash command DEFERRED** to a follow-up slice (7.5+) —
   both /autoplan CEO voices and the eng subagent flagged shipping it
   in the same release as the contract change as scope contamination.
-- **Tests** (+45 new, 703 total):
-  - `test_nonce_store.py` (25 unit tests): all 5 error literals in
+- **Tests** (+49 new, 707 total):
+  - `test_nonce_store.py` (27 unit tests): all 5 error literals in
     `ErrorCode`; `time.monotonic` clock-jump immunity; concurrent issue
     race; secrets.token_bytes entropy regression; tombstone-on-redeem
     distinguishability; reset() isolation; GC bounded; bypass env var.
-  - `test_destructive_token_flow.py` (20 integration tests): 2-call
+  - `test_destructive_token_flow.py` (22 integration tests): 2-call
     happy paths; legacy kwarg shim; always-consume-on-redeem (v1,
     no-op, all paths); restart-during-flow; operation-mismatch via
     tool; log redaction (full nonce never in caplog); atomic markdown
