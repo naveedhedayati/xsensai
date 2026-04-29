@@ -124,6 +124,32 @@ def test_changelog_has_v0_9_0_0_entry(docs):
     assert "[0.9.0.0]" in docs["CHANGELOG.md"]
 
 
+def test_changelog_has_v0_9_1_0_entry(docs):
+    """CHANGELOG must have a v0.9.1.0 entry for Slice 7.5.1 (user_confirmed
+    shim removal) AND must mention BOTH the kwarg it removed AND the
+    removal context (removed/TypeError/shim) — so a future copy-paste
+    regression that mentions user_confirmed for an unrelated reason still
+    fails this gate.
+    """
+    changelog = docs["CHANGELOG.md"]
+    assert "[0.9.1.0]" in changelog, "v0.9.1.0 must have a CHANGELOG entry"
+    # Locate the v0.9.1.0 section and assert it references user_confirmed
+    start = changelog.find("[0.9.1.0]")
+    # Next version header (or end-of-file) bounds the section
+    next_header = changelog.find("\n## [", start + 1)
+    section = changelog[start : next_header if next_header != -1 else None]
+    assert "user_confirmed" in section, (
+        "v0.9.1.0 entry should reference the user_confirmed kwarg it removed"
+    )
+    # Strengthened assertion (per /review): require explicit removal context,
+    # not just any reference to user_confirmed.
+    removal_tokens = ("removed", "Removed", "TypeError", "shim")
+    assert any(tok in section for tok in removal_tokens), (
+        "v0.9.1.0 entry must reference removal context "
+        f"(one of {removal_tokens}), not just the kwarg name"
+    )
+
+
 def test_troubleshooting_covers_slice_6_codes(docs):
     """All Slice 6 error codes must be documented in TROUBLESHOOTING."""
     troubleshooting = docs["TROUBLESHOOTING.md"]
