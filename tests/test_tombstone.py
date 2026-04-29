@@ -7,7 +7,15 @@ Covers:
 - iter_cards / iter_cards_metadata / load_card_by_id include_deleted filter
 - Round-trip preservation (mutate non-tombstone card; deleted=False round-trips)
 - Dedup tombstone helper (existing_source_ids_with_tombstones)
-- TOMBSTONE_BLOCKED canonical envelope (no "Slice 7" suffix)
+- TOMBSTONE_BLOCKED canonical envelope (no stale-slice suffix)
+
+Slice 7 update: delete_bookmark/restore_bookmark switched to a 2-call
+nonce/handshake. The bulk of these tests aren't testing the handshake
+itself — they're testing tombstone semantics on the corpus side. The
+autouse `_destructive_bypass` fixture enables `XSENSAI_DESTRUCTIVE_BYPASS=1`
+for this file so existing `user_confirmed=True` calls remain valid
+through the AD7 bypass path. Tests that specifically cover the new
+handshake semantics live in `tests/test_destructive_token_flow.py`.
 """
 
 from __future__ import annotations
@@ -21,10 +29,22 @@ import frontmatter
 
 from xsensai.errors import XSensaiError
 from xsensai.locks import filelock
-from xsensai.mcp_server import server
+from xsensai.mcp_server import nonce_store, server
 from xsensai.model.card import CardFrontmatter, LoadedCard
 from xsensai.storage import corpus
 from xsensai.sync import dedup
+
+
+@pytest.fixture(autouse=True)
+def _destructive_bypass(monkeypatch):
+    """Slice 7: enable the documented test-fixture bypass so existing
+    user_confirmed=True call sites continue to work. The handshake itself
+    is exercised in test_destructive_token_flow.py.
+    """
+    monkeypatch.setenv("XSENSAI_DESTRUCTIVE_BYPASS", "1")
+    nonce_store.reset_store()
+    yield
+    nonce_store.reset_store()
 
 
 # ----------------------------------------------------------------------------
@@ -176,10 +196,23 @@ def _make_v2_bookmark(
 
 
 class TestDeleteBookmark:
-    def test_delete_requires_user_confirmed(self, vault_corpus):
+    def test_delete_requires_nonce_when_bypass_off(self, vault_corpus, monkeypatch):
+        """Slice 7: delete_bookmark requires a confirmation_nonce in the
+        2-call flow when the bypass env var is not set. The Slice 6
+        `user_confirmed: bool` shim returns the same NONCE_REQUIRED
+        envelope (one-release migration aid).
+        """
+        monkeypatch.delenv("XSENSAI_DESTRUCTIVE_BYPASS", raising=False)
         target_id = _make_v2_paste(vault_corpus, "alpha")
-        result = server.delete_bookmark(id=target_id, user_confirmed=False)
-        assert result.get("ok") is False or "USER_CONFIRMATION_REQUIRED" in str(result)
+        # No nonce, no kwarg → first-call challenge
+        result = server.delete_bookmark(id=target_id)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "NONCE_REQUIRED"
+        # Legacy shim: user_confirmed=True/False both route to the same
+        # NONCE_REQUIRED migration response
+        result2 = server.delete_bookmark(id=target_id, user_confirmed=True)
+        assert result2["error"]["code"] == "NONCE_REQUIRED"
+        assert "deprecated" in result2["error"]["message"].lower()
 
     def test_delete_marks_card(self, vault_corpus):
         target_id = _make_v2_paste(vault_corpus, "alpha")
@@ -240,11 +273,19 @@ class TestRestoreBookmark:
         result = server.restore_bookmark(id=target_id, user_confirmed=True)
         assert result.get("already_active") is True
 
-    def test_restore_requires_user_confirmed(self, vault_corpus):
+    def test_restore_requires_nonce_when_bypass_off(self, vault_corpus, monkeypatch):
+        """Slice 7 mirror of test_delete_requires_nonce_when_bypass_off."""
         target_id = _make_v2_paste(vault_corpus, "alpha")
+        # Set up a deleted card (bypass active here)
         server.delete_bookmark(id=target_id, user_confirmed=True)
-        result = server.restore_bookmark(id=target_id, user_confirmed=False)
-        assert "USER_CONFIRMATION_REQUIRED" in str(result)
+        # Now drop bypass and assert the new handshake gates restore
+        monkeypatch.delenv("XSENSAI_DESTRUCTIVE_BYPASS", raising=False)
+        result = server.restore_bookmark(id=target_id)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "NONCE_REQUIRED"
+        result2 = server.restore_bookmark(id=target_id, user_confirmed=True)
+        assert result2["error"]["code"] == "NONCE_REQUIRED"
+        assert "deprecated" in result2["error"]["message"].lower()
 
 
 class TestListDeleted:
