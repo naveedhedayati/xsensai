@@ -38,6 +38,13 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 **Description:** The DX subagent's empathy narrative noted that without the journal context, the review walk is "just data entry." This is the enrichment that makes review *cheaper than* in-the-moment annotation.
 **Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py) (`due_cards_for_review`)
 
+### `annotate_card` silently drops unknown kwargs and reports false success
+
+**Priority:** P2
+**Origin:** Manual QA pass 2026-04-29 (Phase B5). Calling `annotate_card(id, user_confirmed=True, text="...")` returns `ok: true` and `rendered_message: "Annotated '<id>'"` even though `text` is not a defined parameter and zero frontmatter fields changed. JSON-RPC's permissive default eats the unknown kwarg without complaint, and the success message doesn't reflect that nothing was written.
+**Description:** Two-part fix. (1) Reject unknown kwargs at the MCP boundary OR add a strict mode. (2) When all real mutation args (`why_saved`, `applicability`, `pinned`, `next_review_at`) are None, return a no-op message ("no fields changed; nothing to do") instead of "Annotated". Prevents future LLMs/humans assuming `annotate_card` accepts free-form notes (a reasonable mental model that the current contract silently violates). Affects only DX, not data integrity — file is correctly untouched.
+**Files:** [src/xsensai/mcp_server/server.py](src/xsensai/mcp_server/server.py) (`annotate_card`), [tests/test_card_writer.py](tests/test_card_writer.py) (regression).
+
 ---
 
 ## locks/
@@ -117,6 +124,27 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 **Origin:** Slice 7.5 /review F7 (caught `pyproject.toml` stale at 0.7.0.0 — pre-existing drift since Slice 7) + /plan-eng-review on v0.9.1.0 (caught it would drift again every release without a structural fix).
 **Description:** `pyproject.toml` currently hardcodes `version = "..."` independently from the `VERSION` file. Each release someone has to remember to bump both. Standard fix: `pyproject.toml` reads version dynamically — `dynamic = ["version"]` + `[tool.setuptools.dynamic] version = {file = "VERSION"}` is the simpler change (no new build-time dep). Add 1 doc-consistency test asserting the two stay in sync. ~1 hr work.
 **Files:** [pyproject.toml](pyproject.toml), [VERSION](VERSION), [tests/test_doc_consistency.py](tests/test_doc_consistency.py)
+
+### Cron `headless.run()` treats `status="empty"` as failure (no-new-bookmarks always exits 2)
+
+**Priority:** P0
+**Origin:** Manual QA pass 2026-04-29 (Phase D7). Reproducible: every cron run that finds zero new bookmarks since the last sync fails with exit 2 + heartbeat shows `last_error: 'INFO/SYNC_DONE'` and `consecutive_cron_failures: 1`. The actual sync logic completes successfully — this is purely a return-code mapping bug at the headless ↔ service boundary.
+**Description:** [src/xsensai/sync/service.py:220](src/xsensai/sync/service.py) returns `RunResult(status="empty", rendered_message=<INFO/SYNC_DONE>)` when `len(bookmarks_to_write) == 0`. [src/xsensai/entrypoints/headless.py:296](src/xsensai/entrypoints/headless.py) gates success on `run_result.status == "ok"` only, so `"empty"` falls through to the generic-failure branch (return 2 + heartbeat marked failed). Either: (a) make headless accept both `"ok"` and `"empty"` as success and short-circuit to `return 0` before the commit-and-push block; or (b) make service.run return `"ok"` with `n_new_cards=0` for the no-new path. (a) is structurally simpler. The CLAUDE.md spec already names this exact case: *"Exit codes: 0 full / 0 no-new / 1 partial / 2 fatal"* — the bug violates the spec. Until fixed, the user will see false-alarm cron-failure banners every other day; the `consecutive_cron_failures` counter will keep incrementing toward the banner threshold.
+**Files:** [src/xsensai/entrypoints/headless.py](src/xsensai/entrypoints/headless.py), [src/xsensai/sync/service.py](src/xsensai/sync/service.py), [tests/test_entrypoints_headless.py](tests/test_entrypoints_headless.py) (regression: assert empty-fetch path returns exit 0 + heartbeat success=True).
+
+### `gh secret set --body -` strips trailing newline — corrupts SSH keys
+
+**Priority:** P1
+**Origin:** Manual QA pass 2026-04-29 (Phase D6). The DX D1 helper at [src/xsensai/entrypoints/headless.py:_emit_secrets_stdin](src/xsensai/entrypoints/headless.py) (and the wizard's gh-secrets step that delegates to it) emits `cat /path/to/your/deploy-key | gh secret set VAULT_DEPLOY_KEY --body -` as the documented flow. With current `gh` CLI versions the `--body -` flag silently strips the trailing newline from stdin, which makes SSH ed25519 private keys unparseable on the runner: `Load key: error in libcrypto / Permission denied (publickey)`. Setup looks healthy locally (`ssh -i deploy_key git@github.com` works, `gh secret list` shows the secret) — the cron just keeps failing checkout. Took ~5 min to diagnose by reading actions/checkout's exact error.
+**Description:** Replace the documented pattern with `cat /path/to/your/deploy-key | gh secret set VAULT_DEPLOY_KEY` (omit `--body -` so gh treats stdin as raw bytes), or use a temp-file pattern that explicitly preserves the trailing newline. Same vulnerability potentially exists for the X API tokens (any value with a trailing newline gets corrupted), so fix the helper for ALL secret pushes. Add a smoke test that round-trips a key through `gh secret set` and verifies bytes match (uses `--no-store` to dump the encrypted form, then compare lengths).
+**Files:** [src/xsensai/entrypoints/headless.py](src/xsensai/entrypoints/headless.py) (`_emit_secrets_stdin` helper), [docs/CRON_SETUP.md](docs/CRON_SETUP.md) (any documented `--body -` patterns).
+
+### `install_commands.sh` invokes bare `python` — silent fail under pyenv
+
+**Priority:** P1
+**Origin:** Manual QA pass 2026-04-29 (Phase A1). The Slice 7.5 `permissions.ask` wiring step at line 80 calls `python "$REPO_ROOT/scripts/_settings_merge.py"`. On any system using pyenv where the project's `.python-version` (3.11) is not installed locally — or where `python` is unmapped while `python3` exists — the merge fails with `pyenv: python: command not found`. The shell script catches the non-zero exit and emits `WARN: permissions.ask wiring failed unexpectedly`, but the warning is buried after a long success log and easy to miss. The user's machine missed the wiring for the entire 1-day Slice 7.5 window because of this; the cryptographic gate on `delete_bookmark` / `restore_bookmark` was never installed.
+**Description:** Replace the bare `python` invocation with one that resolves to a working interpreter. Options: (a) `python3` (the merge script is stdlib-only — already true per [scripts/_settings_merge.py](scripts/_settings_merge.py)), (b) auto-detect `.venv/bin/python` if it exists, (c) hard-fail with a clear envelope ("install Python 3.11 or run via venv") instead of WARN. Recommendation: (a) + (c) — change line 80 to `python3` and elevate the failure from WARN to ERROR with non-zero exit so `./scripts/setup.sh --all` notices.
+**Files:** [scripts/install_commands.sh](scripts/install_commands.sh), [scripts/_settings_merge.py](scripts/_settings_merge.py) (verify shebang + stdlib-only invariant), [tests/test_install_commands.py](tests/test_install_commands.py) (regression: simulate `python` not on PATH).
 
 ---
 
