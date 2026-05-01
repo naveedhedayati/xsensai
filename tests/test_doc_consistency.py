@@ -84,25 +84,22 @@ def test_troubleshooting_covers_slice_5_codes(docs):
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 
-def test_readme_current_slice_matches_version(docs):
-    """README's 'Current slice' line must reference the active VERSION.
+def test_changelog_has_entry_for_current_version(docs):
+    """CHANGELOG must have an entry matching the active VERSION.
 
-    Slice 7.5 (v0.9.0.0): made dynamic — was hardcoded to "Slice 6" since
-    Slice 6 and missed bumps in Slice 7 + Slice 7.5. Now derives the
-    expected version from the VERSION file so future slice bumps don't
-    silently break this test.
+    Original guard (pre-public-README rewrite, commit 03ac0c4) checked the
+    README's `**Current slice:**` line. The public README rewrite stripped
+    internal slice/version vocabulary and points readers at CHANGELOG.md
+    for release detail. The contract being guarded — *"VERSION bumped
+    without a corresponding doc entry"* — applies cleanly to CHANGELOG,
+    which is the actual public source of truth for releases.
     """
     version = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
-    readme = docs["README.md"]
-    current_line = None
-    for line in readme.splitlines():
-        if "**Current slice:**" in line:
-            current_line = line
-            break
-    assert current_line is not None, "README missing **Current slice:** line"
-    # The current-slice line must mention the active VERSION (e.g., "v0.9.0.0").
-    assert f"v{version}" in current_line or version in current_line, (
-        f"README current slice doesn't reference VERSION {version}: {current_line}"
+    changelog = docs["CHANGELOG.md"]
+    assert f"[{version}]" in changelog, (
+        f"CHANGELOG.md is missing an entry for the current VERSION ({version}). "
+        f"Bumping VERSION without adding a CHANGELOG section is the regression "
+        f"this test catches."
     )
 
 
