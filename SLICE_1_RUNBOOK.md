@@ -6,7 +6,7 @@ From clean clone to a working `/xfind` in **~5 minutes**.
 
 - Python 3.11+
 - [`uv`](https://docs.astral.sh/uv/) for dep install (or pip)
-- [`qmd`](https://github.com/tobi/qmd) installed via `bun install -g qmd`
+- [`qmd`](https://github.com/tobi/qmd) installed via `bun install -g @tobilu/qmd`
 - Claude Desktop (for MCP tools) and/or Claude Code (for slash commands)
 
 ## Quickstart

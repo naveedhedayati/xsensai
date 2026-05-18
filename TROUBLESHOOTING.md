@@ -33,7 +33,7 @@ If you have v1 cards in there, the v1 adapter loads them automatically (no actio
 **Cause:** something broke in the QMD subprocess wrapper or JSON parser.
 
 **Fix:**
-1. Check QMD is installed: `which qmd` or `$XSENSAI_QMD_PATH`. Install with `bun install -g qmd`.
+1. Check QMD is installed: `which qmd` or `$XSENSAI_QMD_PATH`. Install with `bun install -g @tobilu/qmd`.
 2. Check QMD index health: `qmd status`.
 3. If `details` mention "schema drift" or "non-JSON output", QMD updated its CLI shape. Re-spike: `qmd search "test" --json -c xsensai-cards | head` and update `tests/fixtures/qmd_query_output.json` + the parser in `src/xsensai/retrieval/qmd.py`.
 4. If it's a timeout (QMD didn't respond in 10s), re-run /xfind. If it persists, the index may be huge or stuck — `qmd status` to investigate.
