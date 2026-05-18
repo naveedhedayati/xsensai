@@ -87,7 +87,7 @@ A fuller catalog of error codes and override vocabulary is in [TROUBLESHOOTING.m
 - **macOS.** x-sensai uses macOS-specific facilities (`F_FULLFSYNC` for crash-safe writes, Keychain for credential storage). Linux/Windows aren't supported.
 - **Python 3.11+**.
 - **[bun](https://bun.sh)** to install QMD.
-- **[QMD](https://github.com/tobi/qmd)** as the search backend (`bun install -g qmd`).
+- **[QMD](https://github.com/tobi/qmd)** as the search backend (`bun install -g @tobilu/qmd`).
 - **[Claude Code](https://docs.claude.com/en/docs/claude-code)** or Claude Desktop with MCP support.
 - For sync (optional): **an X developer account** with API access. Initial credit purchase is ~$10; steady-state cost for ~50 bookmarks/month is roughly $1.18/month.
 - For `/xask` web context (optional): the [`last30days`](https://github.com/mvanhorn/last30days-skill) Claude skill installed at `~/.claude/skills/last30days/`.

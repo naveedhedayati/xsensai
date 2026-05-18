@@ -17,7 +17,7 @@ COLLECTION="xsensai-cards"
 
 if [ ! -x "$QMD_BIN" ]; then
   echo "ERROR: qmd binary not found at $QMD_BIN" >&2
-  echo "Install via: bun install -g qmd" >&2
+  echo "Install via: bun install -g @tobilu/qmd" >&2
   echo "Or set XSENSAI_QMD_PATH to your installed binary." >&2
   exit 2
 fi
