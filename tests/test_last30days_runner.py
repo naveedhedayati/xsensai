@@ -13,7 +13,9 @@ import pytest
 from xsensai.web_fork import last30days_runner as runner
 
 
-pytestmark = pytest.mark.asyncio
+# asyncio_mode = "auto" (pyproject) auto-marks async test functions, so no
+# file-level `pytestmark = pytest.mark.asyncio` is needed. Adding one wrongly
+# tagged the lone sync test below and emitted a PytestWarning every run.
 
 
 def _write_fake_binary(path: Path, body: str, executable: bool = True) -> None:
@@ -159,19 +161,11 @@ async def test_question_too_long_returns_failed(tmp_path, monkeypatch):
     assert "question_too_long" in result["reason"]
 
 
-def test_secret_name_allowlist_invariant(monkeypatch):
+def test_secret_name_allowlist_invariant():
     """S8 fix: pin that no secret-shaped name is in the allowlist. If a
     future maintainer adds AWS_SECRET_ACCESS_KEY, the regex catches it.
-
-    The leading async-helper invocation works around the file-level
-    pytestmark so pytest-asyncio sees this as a sync test correctly.
     """
-    monkeypatch.setattr  # touch fixture so pytest threads it through
     for name in runner._ALLOWED_PASSTHROUGH:
         assert not runner._SECRET_NAME_RE.search(name), (
             f"_ALLOWED_PASSTHROUGH leaked a secret-shaped name: {name}"
         )
-
-
-# Strip the file-level asyncio mark from this sync test
-test_secret_name_allowlist_invariant.pytestmark = []

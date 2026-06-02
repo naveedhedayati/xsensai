@@ -13,10 +13,12 @@ contention surface that Slice 4 cron will hit.
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,15 @@ pytestmark = pytest.mark.skipif(
 
 # Subprocess worker — runs in a fresh Python interpreter via -c so we
 # exercise real cross-process flock semantics, not within-process.
+#
+# Readiness barrier (see _spawn_workers): each cold interpreter writes a
+# ready-marker AFTER its imports finish, then blocks until the parent drops a
+# `go` file. Without the barrier, slow+variable interpreter startup (importing
+# pydantic/mcp/etc.) staggers the workers — an early winner can acquire AND
+# release the 100ms lock before a late starter even reaches the flock call.
+# That produces multiple "winners" that never actually held the lock at the
+# same instant: a false failure of a sound lock. The barrier forces all workers
+# to contend inside the same tiny window, which is the real thing under test.
 WORKER_SCRIPT = """
 import json
 import os
@@ -41,13 +52,24 @@ from xsensai.locks import filelock
 from pathlib import Path
 
 corpus = Path({corpus!r})
+gate = Path({gate!r})
 result = {{"pid": os.getpid(), "acquired": False, "error_code": None}}
+
+# Signal "imports done, parked at the gate", then wait for the release.
+(gate / ("ready.%d" % os.getpid())).write_text("1")
+_deadline = time.monotonic() + 15.0
+while not (gate / "go").exists():
+    if time.monotonic() > _deadline:
+        break
+    time.sleep(0.002)
+
 try:
     with filelock.with_card_write_lock(corpus, "xpaste") as h:
         result["acquired"] = True
         result["token"] = h.token
-        # Hold the lock briefly so other workers contend
-        time.sleep(0.1)
+        # Hold long enough that every co-released worker attempts (and fails)
+        # while we still hold. All workers cleared the gate microseconds apart.
+        time.sleep(0.2)
 except XSensaiError as e:
     result["error_code"] = e.code
 
@@ -56,11 +78,20 @@ print(json.dumps(result))
 
 
 def _spawn_workers(corpus: Path, count: int) -> list[dict]:
-    """Spawn `count` subprocesses simultaneously, all racing for the lock.
-    Returns parsed result dicts (one per subprocess).
+    """Spawn `count` subprocesses that all contend for the lock simultaneously.
+
+    Uses a readiness barrier so the race is real: every worker finishes its
+    (slow, variable) interpreter startup and parks at a shared gate; once all
+    `count` workers are parked, the parent releases them at once. This removes
+    the startup-stagger artifact that made this test flaky (multiple non-
+    overlapping "winners"). Returns parsed result dicts (one per subprocess).
     """
     repo_root = str(Path(__file__).resolve().parent.parent / "src")
-    script = WORKER_SCRIPT.format(repo_root=repo_root, corpus=str(corpus))
+    gate = Path(tempfile.mkdtemp(prefix="xsensai-gate-"))
+    go_file = gate / "go"
+    script = WORKER_SCRIPT.format(
+        repo_root=repo_root, corpus=str(corpus), gate=str(gate)
+    )
 
     procs = []
     for _ in range(count):
@@ -71,13 +102,25 @@ def _spawn_workers(corpus: Path, count: int) -> list[dict]:
         )
         procs.append(p)
 
-    results = []
-    for p in procs:
-        stdout, stderr = p.communicate(timeout=10)
-        if p.returncode != 0:
-            print(f"worker stderr: {stderr.decode()}", file=sys.stderr)
-        results.append(json.loads(stdout.decode().strip()))
-    return results
+    try:
+        # Wait until every worker has cleared imports and is parked at the gate.
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if len(list(gate.glob("ready.*"))) >= count:
+                break
+            time.sleep(0.005)
+        # Release all workers at the same instant.
+        go_file.touch()
+
+        results = []
+        for p in procs:
+            stdout, stderr = p.communicate(timeout=20)
+            if p.returncode != 0:
+                print(f"worker stderr: {stderr.decode()}", file=sys.stderr)
+            results.append(json.loads(stdout.decode().strip()))
+        return results
+    finally:
+        shutil.rmtree(gate, ignore_errors=True)
 
 
 @pytest.fixture
