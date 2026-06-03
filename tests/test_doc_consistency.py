@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 DOC_FILES = {
     "CLAUDE.md": PROJECT_ROOT / "CLAUDE.md",
+    "AGENTS.md": PROJECT_ROOT / "AGENTS.md",
     "README.md": PROJECT_ROOT / "README.md",
     "TROUBLESHOOTING.md": PROJECT_ROOT / "TROUBLESHOOTING.md",
     "CHANGELOG.md": PROJECT_ROOT / "CHANGELOG.md",

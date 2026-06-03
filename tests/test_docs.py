@@ -21,11 +21,11 @@ def repo_root() -> Path:
     "rel_path,pattern,description",
     [
         ("commands/xhelp.md", r"/xask\b.*\blive\b", "/xhelp lists /xask as live"),
-        ("CLAUDE.md", r"##\s+Slice 3", "CLAUDE.md has a `## Slice 3` section"),
+        ("CLAUDE.md", r"/xask", "CLAUDE.md documents /xask in the command map"),
         (
-            "CLAUDE.md",
-            r"/xask override vocabulary",
-            "CLAUDE.md documents /xask override vocabulary",
+            "commands/xask.md",
+            r"override vocabulary|no decay",
+            "commands/xask.md documents /xask override vocabulary",
         ),
         ("README.md", r"/xask", "README.md mentions /xask"),
         ("TROUBLESHOOTING.md", r"/xask", "TROUBLESHOOTING.md has a /xask section"),
@@ -46,8 +46,12 @@ def test_xask_documented_everywhere(rel_path: str, pattern: str, description: st
     ["no decay", "skip pins", "no web", "challenge"],
 )
 def test_override_vocabulary_documented(token: str):
-    """All 4 /xask override tokens must appear in CLAUDE.md AND commands/xhelp.md."""
-    for rel in ("CLAUDE.md", "commands/xhelp.md"):
+    """All 4 /xask override tokens must appear in commands/xask.md AND commands/xhelp.md.
+
+    (Post-CLAUDE.md-rewrite: the override vocabulary is a /xask command detail, so
+    it lives in the command docs, not in the slimmed project-instructions file.)
+    """
+    for rel in ("commands/xask.md", "commands/xhelp.md"):
         p = repo_root() / rel
         text = p.read_text(encoding="utf-8")
         assert token in text, (
