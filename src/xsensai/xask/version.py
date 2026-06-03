@@ -9,5 +9,5 @@ Both are logged on every /xask run so a future investigator can answer:
 or service moved. Constant = model behavior changed (or randomness).
 """
 
-PROMPT_TEMPLATE_VERSION = "1.0.0"
+PROMPT_TEMPLATE_VERSION = "1.2.0"
 SERVICE_VERSION = "1.0.0"

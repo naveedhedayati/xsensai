@@ -47,6 +47,7 @@ from xsensai.storage import corpus, inbox, slug
 from xsensai.web_fork import last30days_runner
 from xsensai.xask import log as xask_log
 from xsensai.xask.service import prepare as _xask_prepare_service
+from xsensai.synthesis.template import groundedness_check as _xask_groundedness_check
 from xsensai.synthesis.template import validate as _xask_template_validate
 from xsensai import xask as xask_pkg
 
@@ -1404,11 +1405,17 @@ async def xask_prepare(
          a `## Web this week` section OR a `## (web context unavailable — ...)`
          line between corpus and synthesis, or validation fails.
       3. In `## References`, cite 1-3 cards as BULLETED lines:
-         `- [B] @author — ...` or `- [P] host — ...` (the leading `- ` is required).
+         `- [B] @author — ...` or `- [P] host — ...` (the leading `- ` is
+         required). Cite >=2 DISTINCT cards unless you are abstaining. In
+         `## Synthesis`, every line must cite a `[B]/[P]` ref inline OR end with
+         `(no corpus support — general knowledge)`. If the corpus can't answer,
+         ABSTAIN per HARD_RULES instead of padding.
       4. Call `xask_validate(draft=<your answer>, web_attempted=<web_attempted>,
          challenge_used=<challenge_used>,
-         challenge_found_dissenter=<challenge_found_dissenter>)`, passing the
-         three flags returned HERE verbatim. If it returns ok=false, fix the
+         challenge_found_dissenter=<challenge_found_dissenter>,
+         candidate_card_ids=<meta["rerank_winners"]>)`, passing the three flags
+         AND the returned ids verbatim. The ids turn on the groundedness gate
+         (cite-or-abstain + >=2-distinct). If it returns ok=false, fix the
          reasons and re-validate ONCE.
       5. Emit the validated answer. Do not invent a server-side answer.
 
@@ -1464,13 +1471,23 @@ def xask_validate(
     web_attempted: bool = True,
     challenge_used: bool = False,
     challenge_found_dissenter: bool = False,
+    candidate_card_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Structurally validate a /xask draft YOU synthesized (no LLM call).
+    """Validate a /xask draft YOU synthesized (no LLM call).
 
     Pass the three flags returned by `xask_prepare` verbatim
-    (`web_attempted` / `challenge_used` / `challenge_found_dissenter`). Returns
-    `{"ok": bool, "reasons": [str]}`. On ok=false, fix the listed reasons and
-    re-validate ONCE before emitting.
+    (`web_attempted` / `challenge_used` / `challenge_found_dissenter`).
+
+    Also pass `candidate_card_ids=meta["rerank_winners"]` (the ids
+    `xask_prepare` returned). When you do, this additionally runs the CV-6
+    groundedness gate: the answer must ABSTAIN, or (a) cite a `[B]/[P]` ref —
+    or the `(no corpus support — general knowledge)` hedge — on every
+    `## Synthesis` line AND (b) cite >=2 DISTINCT returned cards. Distinct cards
+    are counted against these ids (AD-E7), not parsed from rendered references.
+    Omit `candidate_card_ids` and only the structural template checks run.
+
+    Returns `{"ok": bool, "reasons": [str]}`. On ok=false, fix the listed
+    reasons and re-validate ONCE before emitting.
     """
     result = _xask_template_validate(
         draft,
@@ -1478,7 +1495,16 @@ def xask_validate(
         challenge_used=challenge_used,
         challenge_found_dissenter=challenge_found_dissenter,
     )
-    return {"ok": result.valid, "reasons": list(result.reasons)}
+    reasons = list(result.reasons)
+    ok = result.valid
+    if candidate_card_ids is not None:
+        grounded = _xask_groundedness_check(
+            draft, candidate_card_ids=candidate_card_ids
+        )
+        if not grounded.grounded:
+            ok = False
+            reasons.extend(grounded.reasons)
+    return {"ok": ok, "reasons": reasons}
 
 
 def main() -> None:
