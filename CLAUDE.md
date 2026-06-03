@@ -519,8 +519,12 @@ shim on `delete_bookmark` / `restore_bookmark` is gone. Plan +
 - **GitHub Actions secrets** (NOT env vars on the user's Mac): set on
   the xsensai repo via `gh secret set`. Required:
   `XSENSAI_X_REFRESH_TOKEN`, `XSENSAI_X_CLIENT_ID`, `VAULT_DEPLOY_KEY`
-  (private half of the deploy key). Optional:
-  `XSENSAI_X_CLIENT_SECRET` (Confidential clients only).
+  (private half of the deploy key), `XSENSAI_SECRETS_PAT` (v0.9.2.0+ —
+  fine-grained PAT with `Secrets:write` on this repo only; the cron uses
+  it to persist the rotated single-use X refresh token back to
+  `XSENSAI_X_REFRESH_TOKEN` so the next run can authenticate. See the
+  "v0.9.2.0 — config" section below + `docs/CRON_SETUP.md#token-rotation`).
+  Optional: `XSENSAI_X_CLIENT_SECRET` (Confidential clients only).
 - **GitHub Actions variables** (NOT secrets — slug isn't sensitive):
   `VAULT_REPO` (e.g., `naveedhedayati/obsidian-vault`),
   `VAULT_CORPUS_SUBPATH` (defaults to `04_areas/x-bookmarks`).
@@ -583,6 +587,37 @@ Override fuzzy match: if you say `dissent`, `recency`, `web off`, etc., `/xask`'
   [src/xsensai/mcp_server/nonce_store.py](src/xsensai/mcp_server/nonce_store.py)).
   Empirically calibrated: ~5s to read the code + ~5s to type + buffer
   for distraction. Brute-force surface is negligible at 40 bits / 90s.
+
+## v0.9.2.0 — config (cron token self-rotation)
+
+Closes the P0 cron token-rotation gap. X invalidates the OAuth refresh
+token on every refresh, so the cron needs to write the rotated token
+back to its own GitHub Actions secret to keep working past the first run.
+
+- **`XSENSAI_SECRETS_PAT`** (GitHub Actions secret, NOT a Mac env var) —
+  fine-grained PAT with `Secrets:write` on the xsensai repo only. The
+  cron uses it to persist the rotated `XSENSAI_X_REFRESH_TOKEN` back to
+  the repo secret via `gh secret set` (token via stdin, PAT via env,
+  never argv). The built-in `GITHUB_TOKEN` cannot write Actions secrets
+  at any permission level, so a PAT is mandatory. Create + push per
+  `docs/CRON_SETUP.md#token-rotation`. Read by `GhSecretTokenProvider`
+  ([src/xsensai/sync/auth.py](src/xsensai/sync/auth.py)) +
+  [src/xsensai/sync/gh_secrets_updater.py](src/xsensai/sync/gh_secrets_updater.py).
+- **`XSENSAI_ALLOW_NO_PERSIST`** (default unset) — set `1` / `true` /
+  `yes` to opt out of the fatal-missing-PAT guard. Without a PAT in
+  GitHub Actions, `headless.run()` exits 2 by default (a silent no-op
+  fallback would resurrect the P0 chronic-failure bug); this env var
+  makes a deliberately rotation-disabled run non-fatal.
+- **Preflight canary**: `python -m xsensai.entrypoints.headless --check`
+  proves the PAT can write a repo secret (throwaway write/delete) BEFORE
+  any single-use X token is consumed. New recovery flag
+  `SYNC_TOKEN_PERSIST_FAILED.md` + error codes `GH_SECRET_WRITE_FAILED`
+  and `TOKEN_PERSIST_FAILED` ([src/xsensai/errors.py](src/xsensai/errors.py)).
+- **Local vs cron token divergence**: a manual `/xsync` rotates the token
+  in the Mac Keychain, not the GitHub secret. After a local rotation,
+  re-push the secret with
+  `python -m xsensai.entrypoints.headless --emit-secrets-stdin`
+  (symmetric dual-write is a tracked follow-up in TODOS.md).
 
 ## Rules of the road
 

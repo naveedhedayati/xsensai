@@ -2,6 +2,82 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.2.0] - 2026-06-02
+
+Closes the P0 cron token-rotation gap: the scheduled GitHub Actions sync now
+keeps working on its own instead of breaking after a single run. X rotates the
+OAuth 2.0 refresh token on every refresh and invalidates the previous one, so
+the cron — which read its token from a GitHub Actions secret it couldn't write
+back to — succeeded exactly once between manual re-auths. Now the cron persists
+each rotated token back to the secret automatically. The fix went through a
+design pass, /plan-eng-review, and a Codex outside-voice review; the code review
+caught and fixed a real timeout-bypass hole before merge.
+
+### Added
+
+- **Cron self-rotation of the X refresh token.** New
+  [src/xsensai/sync/gh_secrets_updater.py](src/xsensai/sync/gh_secrets_updater.py)
+  writes the rotated token back to the `XSENSAI_X_REFRESH_TOKEN` repo secret via
+  `gh secret set` using a fine-grained PAT (`XSENSAI_SECRETS_PAT`, `Secrets:write`
+  on this repo only). Token passed via stdin (never argv), PAT via env, value
+  `::add-mask::`-ed (escaped) in Actions. New `GhSecretTokenProvider`
+  ([src/xsensai/sync/auth.py](src/xsensai/sync/auth.py)) plugs into the existing
+  rotation seam — `XClient` is unchanged.
+- **Canary preflight.** `python -m xsensai.entrypoints.headless --check` now
+  proves the PAT can actually write a repo secret (throwaway write/delete) and
+  logs `gh` version/auth **before** any single-use X token is consumed, so a
+  broken/expired PAT fails fast instead of burning the token.
+- **`SYNC_TOKEN_PERSIST_FAILED.md` recovery flag + heartbeat signal** when a
+  rotation succeeds but the writeback fails (the next run would otherwise die
+  unexplained). Surfaced on every success path and the generic-failure path.
+- Two error codes: `GH_SECRET_WRITE_FAILED`, `TOKEN_PERSIST_FAILED`
+  ([src/xsensai/errors.py](src/xsensai/errors.py)).
+
+### Changed
+
+- **`headless.run()` provider selection** picks the persisting provider when
+  `XSENSAI_SECRETS_PAT` + `GITHUB_REPOSITORY` are present; a missing PAT in
+  GitHub Actions is now **fatal** (opt out with `XSENSAI_ALLOW_NO_PERSIST=1`) so
+  a misconfigured cron can't silently resurrect the P0.
+- **`/xsync`** warns after a local rotation that the cron's stored secret is now
+  stale and must be re-pushed (local Keychain and the cron secret are separate
+  stores; symmetric dual-write is a tracked follow-up).
+- `sync.yml` exposes `XSENSAI_SECRETS_PAT` on the preflight + sync steps
+  ([.github/workflows/sync.yml](.github/workflows/sync.yml)); no `actions:write`
+  (the built-in `GITHUB_TOKEN` cannot write Actions secrets at any level).
+- Docs: [docs/CRON_SETUP.md](docs/CRON_SETUP.md) token-rotation section (PAT
+  setup, blast-radius honesty, irreducible crash window, considered-rejected
+  encrypted-blob alternative); TROUBLESHOOTING + xhelp + xsync updated.
+
+### Fixed
+
+- **Timeout/OSError no longer bypasses the persist gate** (caught in code
+  review): a hung `gh` raised a non-`XSensaiError` that escaped
+  `store_refresh_token`, leaving the token consumed, the run green, and the next
+  run dead. `_run_gh` now converts `TimeoutExpired`/`OSError` to
+  `GH_SECRET_WRITE_FAILED` and the provider catches `Exception` as defense in
+  depth.
+- **`redact_token_strings`** now applies exact-match `extra_secrets` before the
+  heuristic patterns, so the precise-redaction guarantee always fires.
+
+### Tests
+
+- +37 tests (all offline; `gh` subprocess mocked per the no-network rule):
+  [tests/test_gh_secrets_updater.py](tests/test_gh_secrets_updater.py) and
+  cron-rotation cases in
+  [tests/test_entrypoints_headless.py](tests/test_entrypoints_headless.py) —
+  stdin-not-argv, byte-exact, add-mask escaping, fatal-in-CI, canary, all
+  success-return persist gates, timeout→error, non-ok-path flag. Suite: 778
+  passing.
+
+### Known limitations
+
+- Local `/xsync` and cron use separate token stores; a manual sync between cron
+  runs still needs a secret re-push (warned + documented; dual-write is a P1
+  follow-up).
+- Crash between X consuming the old token and the secret write landing is
+  irreducible with single-use tokens — documented; the next run flags it.
+
 ## [0.9.1.1] - 2026-04-29
 
 Hot-fix surfaced by manual QA pass. Brings cron exit-code behavior into

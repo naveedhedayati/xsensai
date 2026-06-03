@@ -187,11 +187,20 @@ shred -u /tmp/xsensai-cron-key /tmp/xsensai-cron-key.pub 2>/dev/null \
   || rm -P /tmp/xsensai-cron-key /tmp/xsensai-cron-key.pub
 ```
 
+**`XSENSAI_SECRETS_PAT` (required for self-rotation):** the fine-grained PAT
+that lets the cron persist a rotated refresh token back to the secret. Without
+it the cron works only once per manual re-auth. See
+[Token rotation](#token-rotation) for how to create it, then:
+
+```bash
+gh secret set XSENSAI_SECRETS_PAT --app actions   # paste the PAT
+```
+
 Verify:
 
 ```bash
 gh secret list
-# Should show: XSENSAI_X_REFRESH_TOKEN, XSENSAI_X_CLIENT_ID,
+# Should show: XSENSAI_X_REFRESH_TOKEN, XSENSAI_X_CLIENT_ID, XSENSAI_SECRETS_PAT,
 # (XSENSAI_X_CLIENT_SECRET if Confidential), VAULT_DEPLOY_KEY
 ```
 
@@ -266,22 +275,86 @@ After 2 days, expect to see a new scheduled run in the Actions tab.
 
 ---
 
-## Token rotation runbook
+## Token rotation
 
-X may rotate your refresh token. The cron run will fail with `[SYNC_AUTH_FAILED]`
-and write `SYNC_AUTH_FAILED.md` to your vault. The banner in `/xfind`
-and `/xask` will surface it.
+X uses **single-use** OAuth 2.0 refresh tokens: every successful refresh
+returns a new token and invalidates the old one. Without handling this, the
+cron works exactly **once** between manual re-auths — every later run dies
+`[AUTH_FAILED]`.
 
-**Recovery (on Mac):**
+### Self-rotation (automatic — recommended)
+
+When you configure the `XSENSAI_SECRETS_PAT` secret (below), the cron
+persists each rotated token back to the `XSENSAI_X_REFRESH_TOKEN` repo
+secret automatically. The loop closes itself; the only remaining manual
+touch is when the PAT expires or X forces a revocation.
+
+**One-time setup — fine-grained PAT:**
+
+1. GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate.
+2. **Repository access:** Only select repositories → this `xsensai` repo.
+3. **Permissions:** Repository permissions → **Secrets: Read and write**.
+4. Set the longest expiry you're comfortable with (this is the only
+   recurring manual touch).
+5. Store it:
+   ```bash
+   gh secret set XSENSAI_SECRETS_PAT --app actions   # paste the token
+   ```
+
+> ⚠️ **Blast radius.** `Secrets: write` lets this token rewrite **every**
+> Actions secret in this repo — including `VAULT_DEPLOY_KEY` and
+> `XSENSAI_X_CLIENT_SECRET`, not just the refresh token. Treat a leak of the
+> sync step as a compromise of all this repo's Actions secrets. Keep it
+> scoped to this one repo and rotate it on expiry. (We deliberately do NOT
+> use the built-in `GITHUB_TOKEN` — it cannot write Actions secrets at any
+> permission level.)
+
+The preflight (`--check`) proves the PAT can actually write a secret (via a
+throwaway canary write/delete) **before** any X token is consumed, so an
+expired/wrong-scope PAT fails fast instead of burning your refresh token.
+
+**Irreducible limitation (crash window):** X consumes the old refresh token
+the instant the refresh succeeds. If the runner is killed / times out / can't
+reach GitHub *after* that but *before* the secret write lands, the rotated
+token is lost and the next run needs manual re-auth (below). This window is
+small and unavoidable with single-use tokens.
+
+**If `SYNC_TOKEN_PERSIST_FAILED.md` appears:** the run synced fine but
+couldn't save the rotated token (PAT expired/revoked/wrong-scope). Renew the
+PAT, re-push the refresh token, and follow the manual recovery below.
+
+### ⚠️ Manual `/xsync` and the cron share one token
+
+The cron reads/writes the token in the **GitHub secret**; local `/xsync`
+reads/writes it in your **macOS Keychain**. They're separate stores holding
+the same single-use token. A manual `/xsync` between cron runs rotates the
+token in Keychain only, leaving the GitHub secret stale — the next cron then
+dies `[AUTH_FAILED]`. After a manual sync, re-push the secret:
+
+```bash
+python -m xsensai.entrypoints.headless --emit-secrets-stdin   # prints the re-push command
+```
+
+`/xsync` warns you about this when it rotates the token. (Full symmetric
+dual-write — local sync also updating the GitHub secret — is a planned
+follow-up; see TODOS.md.)
+
+### Manual recovery (PAT expired, or crash-window loss)
+
+The cron writes `SYNC_AUTH_FAILED.md` (or `SYNC_TOKEN_PERSIST_FAILED.md`)
+to your vault; the `/xfind` and `/xask` banners surface it.
 
 ```bash
 # 1. Re-authorize locally (browser flow; updates Keychain)
 python -m xsensai.sync.setup_oauth --reauth
 
-# 2. Update GitHub Actions secret with the new token (shell-portable form)
+# 2. Re-push the refresh token secret (shell-portable form)
 security find-generic-password -s x-sensai \
   -a x-api-refresh-token -w \
-  | gh secret set XSENSAI_X_REFRESH_TOKEN --body -
+  | gh secret set XSENSAI_X_REFRESH_TOKEN --app actions
+
+# 2b. If the PAT itself expired, renew it (see setup above) then:
+gh secret set XSENSAI_SECRETS_PAT --app actions
 
 # 3. Trigger a manual cron run to verify
 gh workflow run sync.yml
@@ -290,14 +363,18 @@ gh run watch
 # 4. After green, clean up the flag file in your vault
 cd /path/to/your/vault
 git pull origin main           # pull cron's latest
-git rm SYNC_AUTH_FAILED.md
+git rm -f SYNC_AUTH_FAILED.md SYNC_TOKEN_PERSIST_FAILED.md 2>/dev/null
 git commit -m "cron: auth recovered"
 git push origin main
 ```
 
-Time: ~10-15 minutes if you remember the runbook. The flag file's
-recovery instructions repeat the steps so you don't have to dig for
-this doc.
+> **Considered & rejected:** storing the rotated token as an encrypted blob
+> in the vault repo (written by the deploy key, no PAT). It avoids the
+> `Secrets:write` blast radius and gives crude git-based versioning, but adds
+> a crypto dependency, puts an (encrypted) auth secret in the notes repo, and
+> needs a separate stable decrypt key. The fine-grained PAT was chosen for
+> lower complexity and keeping auth state out of the content repo. Revisit if
+> the PAT blast radius becomes a concern.
 
 ---
 
