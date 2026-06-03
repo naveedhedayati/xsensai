@@ -1440,9 +1440,10 @@ async def xask_prepare(
     if challenge_found_dissenter:
         required_sections.append("## Internal tension")
     if result.web_attempted:
-        required_sections.append(
-            "## Web this week  (or a `## (web context unavailable — ...)` line)"
-        )
+        # Literal heading only (a host emits this verbatim). The validator also
+        # accepts a `## (web context unavailable — ...)` line in this slot when
+        # there was no fresh web result; the docstring driving loop explains that.
+        required_sections.append("## Web this week")
     required_sections += ["## Synthesis", "## References"]
 
     return {

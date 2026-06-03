@@ -506,23 +506,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    # Step 0: macOS-only guard. Fail loud up front (not mid-install) on a
-    # non-Darwin platform — x-sensai relies on the macOS Keychain and
-    # F_FULLFSYNC for crash-safe sidecar writes.
-    if sys.platform != "darwin":
+    parser = _build_parser()
+    args = parser.parse_args()  # --help exits here on any platform
+
+    # macOS-only guard for the setup/mutation flows. `--preflight` is read-only
+    # and runs anywhere (so diagnostics + Linux CI work — it REPORTS environment
+    # problems rather than aborting); every other flow needs the macOS Keychain
+    # and F_FULLFSYNC, so fail loud up front instead of deep in OAuth/Keychain.
+    if sys.platform != "darwin" and not args.preflight:
         err = XSensaiError(
             code="UNSUPPORTED_PLATFORM",
             cause=f"x-sensai is macOS-only; detected platform {sys.platform!r}",
-            attempted="setup_wizard step 0 (platform check)",
+            attempted="setup_wizard (platform check)",
             next_action=(
-                "Run x-sensai on macOS. It uses the macOS Keychain for secrets "
+                "Run x-sensai setup on macOS. It uses the macOS Keychain for secrets "
                 "and F_FULLFSYNC for crash-safe writes; Linux/Windows are not supported."
             ),
             retryable=False,
         )
         print(err.format(), file=sys.stderr)
         return 2
-    args = _build_parser().parse_args()
+
     state = _load_state()
     if args.preflight:
         return cmd_preflight(state)
@@ -540,10 +544,13 @@ def main() -> int:
         return cmd_migrate(state, dry_run=args.migrate_dry_run)
     if args.all or args.resume:
         return cmd_all(state, args.vault_repo)
-    # No subcommand flag → default to the full guided flow rather than crashing.
-    # (The core-install steps — corpus/QMD/MCP — land in PR-2; today --all runs
-    # the cron/setup steps, which is the safe default for a bare invocation.)
-    return cmd_all(state, args.vault_repo)
+    # No subcommand flag: print help and exit non-zero. We deliberately do NOT
+    # default to --all — cmd_all runs OAuth, GitHub-secret mutations, and
+    # `migrate --apply`, which must be an explicit choice, never a silent side
+    # effect of a bare `./scripts/setup.sh`. (The `required=False` argparse group
+    # is only there so a bare invocation reaches here instead of crashing.)
+    parser.print_help(sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

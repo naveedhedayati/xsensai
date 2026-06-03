@@ -138,7 +138,10 @@ def resolve_corpus_path(corpus_path: Optional[Path] = None) -> Path:
         p = corpus_path
     else:
         p = get_corpus_path()
-        if os.environ.get("XSENSAI_CORPUS_PATH") is None and not p.exists():
+        # `not env` (empty string OR unset) mirrors get_corpus_path()'s own
+        # truthiness test, so an exported-but-empty XSENSAI_CORPUS_PATH still
+        # auto-creates the neutral default instead of failing CORPUS_UNAVAILABLE.
+        if not os.environ.get("XSENSAI_CORPUS_PATH") and not p.exists():
             try:
                 p.mkdir(parents=True, exist_ok=True)
             except OSError:

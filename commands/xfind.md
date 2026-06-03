@@ -8,7 +8,7 @@ You are running `/xfind` for the x-sensai bookmark corpus.
 
 This command searches your curated bookmark corpus (the MCP tool
 `search_bookmarks`). It is NOT a general web search and NOT a search of
-public X. It returns ranked references from his saved cards.
+public X. It returns ranked references from your saved cards.
 
 If the user's request is for general factual info or web-fresh content,
 politely note that `/xfind` is corpus-only and ask whether they want to

@@ -177,6 +177,14 @@ def test_troubleshooting_covers_slice_7_codes(docs):
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 
+def test_troubleshooting_covers_repo_readiness_codes(docs):
+    """PR-1/PR-2 error codes must be documented in TROUBLESHOOTING (README points
+    users there as the error catalog)."""
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in ["QMD_NOT_FOUND", "UNSUPPORTED_PLATFORM"]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
 def test_troubleshooting_covers_slice_7_5_codes(docs):
     """Slice 7.5 install-time envelopes must be in TROUBLESHOOTING."""
     troubleshooting = docs["TROUBLESHOOTING.md"]

@@ -31,7 +31,7 @@ def tmp_state(tmp_path, monkeypatch):
 def _run_wizard(args):
     return subprocess.run(
         [sys.executable, "-m", "xsensai.entrypoints.setup_wizard"] + args,
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=60,
     )
 
 
@@ -45,6 +45,11 @@ class TestMutualExclusion:
         result = _run_wizard([])
         assert "one of the arguments" not in result.stderr
         assert "is required" not in result.stderr.lower()
+        # ...and must NOT silently default to the side-effectful --all flow
+        # (OAuth / GitHub mutations / migrate --apply). Bare invocation is a
+        # non-zero "here's the help" — never an action.
+        assert "running --all" not in result.stdout
+        assert result.returncode != 0
 
     def test_two_modes_fails(self, tmp_state):
         result = _run_wizard(["--preflight", "--oauth"])

@@ -201,10 +201,12 @@ async def query(text: str, limit: int = 20, qmd_path: Optional[str] = None) -> L
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-    except FileNotFoundError as e:
+    except OSError as e:
+        # FileNotFoundError (ENOENT), PermissionError (EACCES), IsADirectoryError
+        # — any failure to exec the configured qmd path is "qmd unusable".
         raise XSensaiError(
             code="QMD_NOT_FOUND",
-            cause=f"QMD binary not found at {bin_path}",
+            cause=f"QMD binary could not be executed at {bin_path}: {type(e).__name__}",
             attempted=f"exec {bin_path}",
             next_action=(
                 "Install QMD via 'bun install -g qmd', or set $XSENSAI_QMD_PATH "
@@ -278,8 +280,8 @@ async def update(qmd_path: Optional[str] = None) -> None:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-    except FileNotFoundError as e:
-        log.warning("qmd update: binary not found at %s (%s); index stale", bin_path, e)
+    except OSError as e:
+        log.warning("qmd update: binary unusable at %s (%s); index stale", bin_path, e)
         return
 
     try:
