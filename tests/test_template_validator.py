@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from xsensai.synthesis.template import validate
+from xsensai.synthesis.template import (
+    GROUNDEDNESS_MIN_DISTINCT_CARDS,
+    OUTPUT_TEMPLATE,
+    groundedness_check,
+    validate,
+)
 
 
 def _draft_full(
@@ -129,6 +134,79 @@ def test_stricter_reprompt_useful_when_invalid():
 def test_stricter_reprompt_empty_when_valid():
     res = validate(_draft_full(), web_attempted=False)
     assert res.stricter_reprompt() == ""
+
+
+# ----- References bullet reconciliation -------------------------------------
+# The validator (AD-E7 / _REFERENCE_LINE_RE) only counts BULLETED `[B]/[P]`
+# lines. The prompt-side instruction must therefore tell the host to bullet
+# its references — otherwise a faithful host emits non-bulleted lines and
+# validate() fails on call #1. These guard the prompt side so it can't drift
+# back to the old "use the format_reference() format" (no-bullet) wording.
+
+
+def test_output_template_requires_bulleted_references():
+    """OUTPUT_TEMPLATE must instruct one bulleted `- [B]/[P]` line per card."""
+    refs_block = OUTPUT_TEMPLATE.split("## References", 1)[1]
+    assert "- " in refs_block
+    assert "[B]" in refs_block and "[P]" in refs_block
+    # The instruction must be explicit that the bullet is mandatory, so the
+    # host doesn't treat it as cosmetic.
+    assert "REQUIRED" in refs_block or "bullet" in refs_block.lower()
+
+
+def test_stricter_reprompt_mentions_bulleted_references():
+    """The retry guidance must name the bullet requirement so call #2 recovers."""
+    res = validate("## From your corpus\nfoo\n", web_attempted=False)
+    msg = res.stricter_reprompt()
+    assert "bullet" in msg.lower()
+    assert "- " in msg
+
+
+def test_format_reference_line_passes_validator_when_bulleted():
+    """A reference line in format_reference()'s layout validates once bulleted.
+
+    Ties the formatter's output shape to the validator: format_reference()
+    itself stays bullet-free (it feeds the input-context `reference:` lines, not
+    the user-facing References block), and prepending '- ' is exactly what the
+    prompt now asks the host to do — that bulleted line must validate.
+    """
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from xsensai.model.card import CardFrontmatter, LoadedCard
+    from xsensai.retrieval.format import format_reference
+
+    cf = CardFrontmatter(
+        source_type="bookmark",
+        source="https://x.com/paulg/status/123",
+        source_id="123",
+        author="@paulg",
+        captured=datetime(2026, 4, 20, tzinfo=timezone.utc),
+        why_saved="explained well",
+        raw_path="./x.raw.txt",
+        raw_checksum="sha256:" + "0" * 64,
+    )
+    card = LoadedCard(
+        fm=cf,
+        body="## Content\n\nMost great startups began as side projects.",
+        raw_bytes=b"",
+        md_path=Path("card.md"),
+    )
+    ref = format_reference(card)
+    assert not ref.startswith("- "), "format_reference itself stays bullet-free"
+    draft = "\n".join([
+        "## From your corpus",
+        "body",
+        "",
+        "## Synthesis",
+        "syn",
+        "",
+        "## References",
+        f"- {ref}",
+        "",
+    ])
+    res = validate(draft, web_attempted=False)
+    assert res.valid, res.reasons
 
 
 # ----- F7: section ordering -------------------------------------------------
@@ -272,3 +350,180 @@ def test_valid_synthesis_three_lines_at_cap():
     ])
     res = validate(draft, web_attempted=False)
     assert res.valid, res.reasons
+
+
+# ----- CV-6: groundedness (cite-or-abstain, >=2 distinct cards) -------------
+# groundedness_check() is a SEPARATE corroboration gate, not the structural
+# floor. Structural only (no claim/card text comparison — EC10). Distinct cards
+# are counted against the RETURNED ids (AD-E7), not parsed from rendered refs.
+
+# Returned-id fixtures: a bookmark id ends in its numeric source_id (which the
+# rendered permalink carries) and a paste id IS its filename stem.
+_CARD_A = "2026-04-20-paulg-1234567890"           # bookmark
+_CARD_B = "paste-2026-04-18-cofounder-meeting-notes"  # paste
+_REF_A = "- [B] @paulg — startups | https://x.com/paulg/status/1234567890 | why: x"
+_REF_B = "- [P] notes — cofounder fit | paste-2026-04-18-cofounder-meeting-notes.md | why: y"
+
+
+def _g_draft(synthesis: str, *refs: str, corpus: str = "Grounded take.") -> str:
+    parts = ["## From your corpus", corpus, "", "## Synthesis", synthesis, "",
+             "## References"]
+    parts.extend(refs)
+    return "\n".join(parts)
+
+
+def test_groundedness_two_distinct_returned_cards_is_grounded():
+    draft = _g_draft(
+        "Cofounder fit matters [B], and startups begin as side projects [P].",
+        _REF_A, _REF_B,
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.grounded, res.reasons
+    assert res.abstained is False
+    assert res.distinct_cards == 2
+    assert res.unsupported_claims == []
+
+
+def test_groundedness_single_distinct_card_not_grounded():
+    """One cited returned card passes the structural floor but fails the >=2 bar."""
+    draft = _g_draft("Startups begin as side projects [B].", _REF_A)
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.distinct_cards == 1  # only _CARD_A's source_id appears
+    assert res.grounded is False
+    assert any("distinct" in r for r in res.reasons)
+    # ...and the structural validator still accepts it (floor unchanged).
+    assert validate(draft, web_attempted=False).valid
+
+
+def test_groundedness_distinct_counted_against_returned_ids_not_refs():
+    """AD-E7: a rendered ref to a card the tool did NOT return must not inflate
+    the distinct count. Only ids in candidate_card_ids can count."""
+    draft = _g_draft(
+        "Claim one [B] and claim two [P].",
+        _REF_A,
+        "- [P] rogue — not returned | rogue-card-not-returned.md | why: z",
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A])  # rogue not returned
+    assert res.distinct_cards == 1
+    assert res.grounded is False
+
+
+def test_groundedness_same_card_twice_counts_once():
+    """Two reference lines, same returned card -> one distinct -> not grounded.
+    Guards faking corroboration by restating one source."""
+    draft = _g_draft(
+        "Point [B] and the same point again [B].",
+        _REF_A,
+        "- [B] @paulg — restated | https://x.com/paulg/status/1234567890 | why: z",
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.distinct_cards == 1
+    assert res.grounded is False
+
+
+def test_groundedness_uncited_synthesis_line_flagged():
+    """§4.3(a): a Synthesis line with no [B]/[P] and no hedge is unsupported."""
+    draft = _g_draft(
+        "Founders should obsess over cofounder fit.",  # no citation, no hedge
+        _REF_A, _REF_B,
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.unsupported_claims  # the bare line
+    assert res.grounded is False
+    assert any("Synthesis" in r for r in res.reasons)
+
+
+def test_groundedness_hedge_satisfies_claim_support():
+    """§4.3(a): the explicit hedge counts as support for an uncited line."""
+    draft = _g_draft(
+        "Founders value cofounder fit [B]; markets may shift "
+        "(no corpus support — general knowledge).",
+        _REF_A, _REF_B,
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.unsupported_claims == []
+    assert res.grounded is True
+
+
+def test_groundedness_abstention_is_grounded_without_two_cards():
+    draft = _g_draft(
+        "No grounded claim to make.",
+        corpus="Your corpus doesn't cover this question.",
+    )
+    res = groundedness_check(draft, candidate_card_ids=[])
+    assert res.abstained is True
+    assert res.grounded is True
+
+
+def test_groundedness_abstention_phrase_no_relevant_cards():
+    draft = _g_draft(
+        "Nothing to synthesize.",
+        _REF_A,
+        corpus="There are no relevant cards in your corpus for this.",
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A])
+    assert res.abstained is True
+    assert res.grounded is True
+
+
+def test_groundedness_ordinary_doesnt_is_not_abstention():
+    """A normal answer that merely contains 'doesn't' is NOT an abstention,
+    so the >=2 distinct-card bar still applies."""
+    draft = _g_draft(
+        "Wealth doesn't come from selling time; it compounds via leverage [B].",
+        _REF_A,
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.abstained is False
+    assert res.distinct_cards == 1
+    assert res.grounded is False
+
+
+def test_groundedness_substring_collision_does_not_inflate_distinct():
+    """Regression: a shorter source_id (456) must NOT match inside a longer
+    one (123456). Only the genuinely-cited card counts."""
+    cand = ["2026-04-20-a-456", "2026-04-20-b-123456"]
+    draft = _g_draft(
+        "Only card b is cited here [B].",
+        "- [B] @b — point | https://x.com/b/status/123456 | why: y",
+    )
+    res = groundedness_check(draft, candidate_card_ids=cand)
+    assert res.distinct_cards == 1, "456 must not match inside 123456"
+    assert res.grounded is False
+
+
+def test_groundedness_id_in_corpus_prose_not_counted():
+    """Regression: an id mentioned outside `## References` (here, in the corpus
+    prose) does not count as a citation — only the References block does."""
+    draft = _g_draft(
+        "A claim [B].",
+        _REF_A,  # only card A is in References
+        corpus=f"Grounded take; see also {_CARD_B}.md elsewhere.",
+    )
+    res = groundedness_check(draft, candidate_card_ids=[_CARD_A, _CARD_B])
+    assert res.distinct_cards == 1, "card B is only in prose, not References"
+    assert res.grounded is False
+
+
+def test_groundedness_empty_candidate_ids_non_abstain_fails():
+    """No returned ids + a non-abstaining claim -> 0 distinct -> not grounded."""
+    draft = _g_draft("A bold claim [B].", _REF_A)
+    res = groundedness_check(draft, candidate_card_ids=[])
+    assert res.distinct_cards == 0
+    assert res.grounded is False
+    assert any("distinct" in r for r in res.reasons)
+
+
+def test_groundedness_falsy_candidate_id_skipped():
+    """A falsy ("" / None-ish) entry in the candidate list is skipped cleanly."""
+    res_with = groundedness_check(
+        _g_draft("A claim [B].", _REF_A), candidate_card_ids=["", _CARD_A]
+    )
+    res_without = groundedness_check(
+        _g_draft("A claim [B].", _REF_A), candidate_card_ids=[_CARD_A]
+    )
+    assert res_with.distinct_cards == res_without.distinct_cards == 1
+
+
+def test_groundedness_min_distinct_constant_is_two():
+    assert GROUNDEDNESS_MIN_DISTINCT_CARDS == 2
