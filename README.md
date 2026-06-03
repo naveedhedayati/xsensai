@@ -215,6 +215,8 @@ The full override vocabulary is in `commands/xsync.md` and surfaced via `/xhelp`
 | `XSENSAI_XASK_LOG_MODE` | `hash_only` | `off` / `hash_only` / `full` — privacy default for question logs. |
 | `XSENSAI_XSYNC_LOG_MODE` | `hash_only` | Same convention for sync logs. |
 | `XSENSAI_CRON_API_CAP` | `200` | Per-attempt X API call cap for cron. |
+| `XSENSAI_SECRETS_PAT` | — | Set as a GitHub Actions secret (not a local env var). Fine-grained PAT with `Secrets:write` on this repo only; lets the cron persist the rotated single-use X refresh token back to the `XSENSAI_X_REFRESH_TOKEN` secret. Required for unattended cron sync — see [docs/CRON_SETUP.md](docs/CRON_SETUP.md#token-rotation). |
+| `XSENSAI_ALLOW_NO_PERSIST` | unset | Opt out of the fatal-missing-PAT guard so a cron run without `XSENSAI_SECRETS_PAT` doesn't exit 2. |
 | `XSENSAI_DESTRUCTIVE_BYPASS` | unset | Skip the confirmation-nonce handshake for scripted maintenance. Audit-logged. |
 
 ---
