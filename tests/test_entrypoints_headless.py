@@ -21,6 +21,23 @@ import pytest
 from xsensai.entrypoints import headless
 
 
+@pytest.fixture(autouse=True)
+def _neutralize_ci_env(monkeypatch):
+    """Make this module hermetic: run identically locally and inside GitHub
+    Actions. The cron self-rotation logic branches on GITHUB_ACTIONS +
+    GITHUB_REPOSITORY + XSENSAI_SECRETS_PAT, all of which CI sets for real.
+    Default each test to a clean slate; tests that exercise the rotation/
+    fatal-in-CI paths set these env vars explicitly (which runs after this
+    autouse fixture and overrides it)."""
+    for _v in (
+        "GITHUB_ACTIONS",
+        "GITHUB_REPOSITORY",
+        "XSENSAI_SECRETS_PAT",
+        "XSENSAI_ALLOW_NO_PERSIST",
+    ):
+        monkeypatch.delenv(_v, raising=False)
+
+
 def test_check_preflight_missing_env(monkeypatch, capsys):
     monkeypatch.delenv("XSENSAI_X_REFRESH_TOKEN", raising=False)
     monkeypatch.delenv("XSENSAI_X_CLIENT_ID", raising=False)
