@@ -92,13 +92,12 @@ def cmd_preflight(state: Dict[str, Any]) -> int:
     # ssh-keygen
     if not shutil.which("ssh-keygen"):
         issues.append("ssh-keygen not found (install OpenSSH)")
-    # qmd (best-effort: env var or default path)
-    qmd_path = os.environ.get(
-        "XSENSAI_QMD_PATH", "/Users/naveedhedayati/.bun/bin/qmd"
-    )
-    if not shutil.which("qmd") and not Path(qmd_path).exists():
+    # qmd (best-effort: $XSENSAI_QMD_PATH or `qmd` on PATH)
+    qmd_path = os.environ.get("XSENSAI_QMD_PATH")
+    if not shutil.which("qmd") and not (qmd_path and Path(qmd_path).exists()):
         issues.append(
-            f"qmd not found at {qmd_path} (run scripts/bootstrap_qmd.sh)"
+            "qmd not found on PATH (install via `bun install -g qmd`, or set "
+            "$XSENSAI_QMD_PATH)"
         )
     # git remote (origin) for the xsensai repo
     try:
