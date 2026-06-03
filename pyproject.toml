@@ -25,11 +25,6 @@ classifiers = [
     "Topic :: Utilities",
 ]
 
-[project.urls]
-Homepage = "https://github.com/naveedhedayati/xsensai"
-Repository = "https://github.com/naveedhedayati/xsensai"
-Changelog = "https://github.com/naveedhedayati/xsensai/blob/main/CHANGELOG.md"
-
 dependencies = [
     "mcp>=1.0",
     "pydantic>=2.0",
@@ -47,6 +42,11 @@ dev = [
 [project.scripts]
 xsensai-mcp = "xsensai.mcp_server.__main__:main"
 xsensai-eval-history = "xsensai.cli.eval_history:main"
+
+[project.urls]
+Homepage = "https://github.com/naveedhedayati/xsensai"
+Repository = "https://github.com/naveedhedayati/xsensai"
+Changelog = "https://github.com/naveedhedayati/xsensai/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
