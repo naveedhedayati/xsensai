@@ -213,7 +213,7 @@ The vault repo slug is NOT secret — store it as a workflow variable
 
 ```bash
 gh variable set VAULT_REPO --body "<owner>/<vault-repo-name>"
-# Example: gh variable set VAULT_REPO --body "naveedhedayati/obsidian-vault"
+# Example: gh variable set VAULT_REPO --body "your-username/your-vault-repo"
 ```
 
 If your vault corpus lives at a non-default subpath (default:

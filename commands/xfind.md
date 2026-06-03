@@ -1,12 +1,12 @@
 ---
-description: Fast lookup against Naveed's curated x-sensai bookmark corpus
+description: Fast lookup against your curated x-sensai bookmark corpus
 ---
 
 You are running `/xfind` for the x-sensai bookmark corpus.
 
 ## What this routes to
 
-This command searches Naveed's curated bookmark corpus (the MCP tool
+This command searches your curated bookmark corpus (the MCP tool
 `search_bookmarks`). It is NOT a general web search and NOT a search of
 public X. It returns ranked references from his saved cards.
 

@@ -1,5 +1,5 @@
 ---
-description: Sync new bookmarks from X into Naveed's x-sensai corpus
+description: Sync new bookmarks from X into your x-sensai corpus
 ---
 
 You are running `/xsync` for the x-sensai bookmark corpus.

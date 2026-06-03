@@ -10,6 +10,25 @@ readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Naveed Hedayati" }]
 license = { text = "MIT" }
+keywords = [
+    "mcp", "model-context-protocol", "claude-code", "obsidian",
+    "twitter-bookmarks", "x-bookmarks", "bm25",
+    "personal-knowledge-management", "second-brain", "macos",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/naveedhedayati/xsensai"
+Repository = "https://github.com/naveedhedayati/xsensai"
+Changelog = "https://github.com/naveedhedayati/xsensai/blob/main/CHANGELOG.md"
 
 dependencies = [
     "mcp>=1.0",

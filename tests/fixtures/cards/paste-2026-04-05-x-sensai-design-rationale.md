@@ -1,6 +1,6 @@
 ---
 source_type: paste
-source_url: https://github.com/naveedhedayati/xsensai
+source_url: https://example.com/x-sensai
 author: self
 captured: 2026-04-05T13:00:00Z
 date: 2026-04-05T13:00:00Z

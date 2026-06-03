@@ -1,5 +1,5 @@
 ---
-description: Save pasted content into Naveed's x-sensai corpus (with abort recovery)
+description: Save pasted content into your x-sensai corpus (with abort recovery)
 ---
 
 You are running `/xpaste` for the x-sensai bookmark corpus.

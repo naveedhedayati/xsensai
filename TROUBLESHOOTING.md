@@ -9,7 +9,7 @@ Keyed by error code. Every error in x-sensai routes through `XSensaiError.format
 **Cause:** the corpus directory is missing, empty, or not a directory.
 
 **Fix:**
-1. Check `$XSENSAI_CORPUS_PATH` (defaults to `~/Documents/Vault/04_areas/x-bookmarks/`).
+1. Check `$XSENSAI_CORPUS_PATH` (defaults to `~/.local/share/xsensai/corpus`).
 2. Make sure the directory exists and contains `.md` files.
 3. Run `scripts/bootstrap_qmd.sh` to (re-)create the QMD index pointed at it.
 

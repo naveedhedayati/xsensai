@@ -79,7 +79,7 @@ async def search_bookmarks(
     no_decay: bool = False,
     include_pinned: bool = True,
 ) -> Dict[str, Any]:
-    """Search Naveed's curated bookmark corpus.
+    """Search your curated bookmark corpus.
 
     WHEN TO CALL: the user references their saved bookmarks, their curated
     reading, "what have I bookmarked about X", "from my corpus", "what does
@@ -318,7 +318,7 @@ def _tombstone_blocked_response(card: "LoadedCard", attempted_op: str) -> Dict[s
         code="TOMBSTONE_BLOCKED",
         cause=f"card {card.id!r} is deleted (deleted_at: {deleted_at_str})",
         attempted=f"{attempted_op}({card.id!r})",
-        next_action="re-create via /xpaste, or restore via /xrestore",
+        next_action="re-create via `paste_bookmark` (`/xpaste`), or restore via `restore_bookmark` (`/xrestore`)",
         retryable=False,
     )
     return _write_error_response(err)
@@ -359,7 +359,7 @@ async def paste_bookmark(
     tags: Optional[List[str]] = None,
     clear_snapshot_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Save pasted content as a v2 paste card in Naveed's corpus.
+    """Save pasted content as a v2 paste card in your corpus.
 
     USAGE: This is the writer behind /xpaste. Set user_confirmed=True only
     after the user has explicitly approved the write — the /xpaste slash

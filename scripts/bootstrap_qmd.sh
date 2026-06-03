@@ -2,7 +2,7 @@
 # bootstrap_qmd.sh — idempotent QMD collection setup for x-sensai.
 #
 # Creates the 'xsensai-cards' collection pointing at $XSENSAI_CORPUS_PATH
-# (default: ~/Documents/Vault/04_areas/x-bookmarks/) so /xfind has an
+# (default: ~/.local/share/xsensai/corpus) so /xfind has an
 # index to search. Safe to re-run; if the collection already exists, no-op.
 #
 # Used by:
@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-QMD_BIN="${XSENSAI_QMD_PATH:-/Users/naveedhedayati/.bun/bin/qmd}"
-CORPUS_PATH="${XSENSAI_CORPUS_PATH:-$HOME/Documents/Vault/04_areas/x-bookmarks}"
+QMD_BIN="${XSENSAI_QMD_PATH:-$(command -v qmd || true)}"
+CORPUS_PATH="${XSENSAI_CORPUS_PATH:-$HOME/.local/share/xsensai/corpus}"
 COLLECTION="xsensai-cards"
 
 if [ ! -x "$QMD_BIN" ]; then
