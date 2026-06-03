@@ -44,6 +44,15 @@ rules); the host completes it. This means: no API keys in the product, no
 usage-based AI billing inside the tool, and your data never leaves your machine
 for a third-party inference endpoint. It is a deliberate ownership/privacy choice.
 
+The host then validates its own draft back through `xask_validate` (no LLM call):
+a structural check on the template, plus an optional **groundedness gate** when
+the host passes `candidate_card_ids` (the ids `xask_prepare` returned). The gate
+is deterministic and offline — it requires the answer to either abstain or cite
+≥2 distinct returned cards with every `## Synthesis` line backed by an inline
+`[B]/[P]` reference (or a `(no corpus support — general knowledge)` hedge).
+Distinct cards are counted against the returned ids, not parsed from the rendered
+references, which show author/permalink rather than the id.
+
 ## MCP server (the host-agnostic surface)
 
 `xsensai-mcp` speaks JSON-RPC over **stdio** — so it **logs to stderr only**; any

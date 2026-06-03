@@ -235,18 +235,23 @@ The full override vocabulary is in `commands/xsync.md` and surfaced via `/xhelp`
 
 ## Quality
 
-x-sensai ships a 15-query golden-set evaluation against a fixture corpus.
+x-sensai measures retrieval quality honestly and gates the answer it hands you.
 
-- **top-1 hit rate: 93%** (14/15 queries return the expected card as #1)
-- **top-3 hit rate: 100%**
+**Retrieval eval** — a golden set against a fixture corpus:
 
-Run it yourself:
+- **15 keyword queries:** top-1 hit rate **93%** (14/15 return the expected card as #1), top-3 hit rate **100%**, keyword MRR **0.97**.
+- **8 paraphrase queries** (low literal overlap with the target card): tracked as a diagnostic, not a gate. MRR is ~**0.00** today by design — retrieval is BM25-only (vector search is off), so a zero-overlap query retrieves nothing. This split exposes the semantic ceiling and is logged every run so the lift from a future vector/LLM rerank is visible.
+- **5 hard-negative distractor cards** salted into the eval corpus. Precision is hard-gated: a distractor must never outrank the true answer at #1.
+
+**Groundedness gate** — `/xask` answers don't just have to be well-formatted, they have to be backed by your cards. Pass `meta["rerank_winners"]` from `xask_prepare` to `xask_validate` and the answer must either explicitly **abstain** ("your corpus doesn't cover this") or **cite at least 2 distinct cards** AND back every `## Synthesis` line with an inline `[B]/[P]` reference (or a `(no corpus support — general knowledge)` hedge). The check is deterministic and offline — no LLM judge.
+
+Run the eval yourself:
 
 ```bash
 XSENSAI_RUN_INTEGRATION=1 .venv/bin/pytest tests/eval/golden_set.py -v -s
 ```
 
-Trend over time: `xsensai-eval-history`.
+Trend over time: `xsensai-eval-history` (shows keyword and paraphrase MRR alongside hit rates).
 
 ---
 

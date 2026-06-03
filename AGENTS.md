@@ -36,7 +36,7 @@ run `pip install -e .` and restart).
 | Flow | Slash command (Claude Code) | MCP tool(s) — Codex uses these directly |
 |---|---|---|
 | Search | `/xfind` | `search_bookmarks(query=...)` → hits + `rendered_markdown`; `get_bookmark(id)` for detail |
-| Ask (grounded synthesis) | `/xask` | `xask_prepare(question=...)` → **you** synthesize per the returned driving loop → `xask_validate(...)`. No server-side LLM; the prompt is for you to answer. |
+| Ask (grounded synthesis) | `/xask` | `xask_prepare(question=...)` → **you** synthesize per the returned driving loop → `xask_validate(draft=..., candidate_card_ids=meta["rerank_winners"], ...)`. No server-side LLM; the prompt is for you to answer. Pass `candidate_card_ids` to turn on the groundedness gate: the answer must abstain, or cite ≥2 distinct returned cards with every `## Synthesis` line carrying an inline `[B]/[P]` ref (or a `(no corpus support — general knowledge)` hedge). |
 | Sync from X | `/xsync` | sync orchestrator (CLI; needs a paid X dev app) |
 | Backfill extraction | `/xextract` | extraction (host) |
 | Paste a post | `/xpaste` | `paste_bookmark(...)` |

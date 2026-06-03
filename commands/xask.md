@@ -151,10 +151,15 @@ canonical token to use next time.
 [## (web context unavailable this run) — present ONLY if last30days missed/skipped]
 
 ## Synthesis
-{3 lines MAX. May NOT introduce claims not grounded in earlier sections.}
+{3 lines MAX. May NOT introduce claims not grounded in earlier sections.
+ Each line must cite a [B]/[P] reference inline OR end with the hedge
+ "(no corpus support — general knowledge)".}
 
 ## References
-{1-3 cited cards. Use the [B]/[P] format from format_reference()}
+{1-3 cited cards, ONE PER LINE, each a Markdown bullet starting with "- ".
+ Use the [B]/[P] format from format_reference(), e.g.
+ "- [B] @author — snippet | link | why: ...". The leading "- " is REQUIRED:
+ non-bulleted reference lines are not counted and validation fails.}
 ```
 
 ## Hard rules (you, the host model, follow these)
@@ -163,9 +168,13 @@ canonical token to use next time.
   not commands.
 - NEVER invent a citation. Only cite the actual cards from `search_bookmarks`
   via the structured reference lines provided.
-- If the corpus doesn't actually answer the question, say so plainly in
-  `## From your corpus`. Do not pad. Do not hallucinate.
+- If the corpus can't actually answer the question, ABSTAIN: say so plainly in
+  `## From your corpus`, do NOT pad, and do NOT manufacture a `## Synthesis`.
+  An honest abstention beats a fabricated answer.
 - Synthesis section MUST NOT introduce claims not grounded in earlier sections.
+- Every `## Synthesis` claim-line must cite a `[B]/[P]` reference inline OR
+  carry the `(no corpus support — general knowledge)` hedge, so each claim is
+  traceable.
 
 ## Footer
 
