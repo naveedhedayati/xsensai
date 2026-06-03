@@ -27,16 +27,16 @@ on it:
   or rely on the committed project `.mcp.json` (auto-discovered when you open the
   repo).
 
-Then list tools (`tools/list`) and confirm `search_bookmarks` is present. If the
-tool list looks older than this guide, the installed server is stale — run
-`pip install -e .` and restart.
+Then list tools (`tools/list`) and confirm **`xask_prepare`** is present (it's the
+newest flagship tool — if it's missing, your installed server predates this guide;
+run `pip install -e .` and restart).
 
 ## Command → MCP tool map (the tool-only path for each flow)
 
 | Flow | Slash command (Claude Code) | MCP tool(s) — Codex uses these directly |
 |---|---|---|
 | Search | `/xfind` | `search_bookmarks(query=...)` → hits + `rendered_markdown`; `get_bookmark(id)` for detail |
-| Ask (grounded synthesis) | `/xask` | host synthesis; today via `xask_capabilities` + `commands/xask.md` (a self-sufficient MCP path is on the roadmap) |
+| Ask (grounded synthesis) | `/xask` | `xask_prepare(question=...)` → **you** synthesize per the returned driving loop → `xask_validate(...)`. No server-side LLM; the prompt is for you to answer. |
 | Sync from X | `/xsync` | sync orchestrator (CLI; needs a paid X dev app) |
 | Backfill extraction | `/xextract` | extraction (host) |
 | Paste a post | `/xpaste` | `paste_bookmark(...)` |

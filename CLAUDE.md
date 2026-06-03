@@ -35,7 +35,7 @@ your cards live in your own vault, version-controlled separately.
 | Command | What it does | MCP tool(s) |
 |---|---|---|
 | `/xfind` | Search the corpus (BM25 + recency + pins) | `search_bookmarks`, `get_bookmark` |
-| `/xask` | Grounded synthesis over the corpus + this week's web | host synthesis (see `commands/xask.md`); `xask_capabilities` |
+| `/xask` | Grounded synthesis over the corpus + this week's web | `xask_prepare` → host synthesis → `xask_validate` (see `commands/xask.md`); `xask_capabilities` |
 | `/xsync` | Pull new bookmarks from X (needs a paid X dev app) | sync orchestrator (CLI) |
 | `/xextract` | Backfill summaries/tags for pending cards | extraction (host) |
 | `/xpaste` | Save pasted content as a card | `paste_bookmark` (+ recovery wire-ups) |

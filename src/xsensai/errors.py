@@ -134,6 +134,8 @@ InfoCode = Literal[
     "CRON_PARTIAL_DUE_TO_COST",
     "EXTRACTION_BACKLOG_GROWING",
     "LAZY_EXTRACT_TRIGGERED",
+    # Agent-driven setup: a step only a human can do (X dev app / OAuth / pay)
+    "HUMAN_ACTION_REQUIRED",
 ]
 
 _VALID_CODES = frozenset(get_args(ErrorCode))
