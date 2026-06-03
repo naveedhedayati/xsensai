@@ -45,7 +45,9 @@ from xsensai.sync.auth import (
     CLIENT_ID_ENV,
     CLIENT_SECRET_ENV,
     ENV_VAR_NAME as REFRESH_TOKEN_ENV,
+    SECRETS_PAT_ENV,
     EnvSecretTokenProvider,
+    GhSecretTokenProvider,
 )
 from xsensai.sync.cost_ceiling import BudgetTracker
 from xsensai.sync.extraction import DeferredExtractor
@@ -57,6 +59,16 @@ log = logging.getLogger(__name__)
 # Auth-failure flag committed to vault for user visibility (autoplan E7
 # = static template only, no exception text).
 SYNC_AUTH_FAILED_FLAG = "SYNC_AUTH_FAILED.md"
+
+# Token-persist-failure flag: the run synced fine but the rotated refresh
+# token could not be written back to the GH secret, so the NEXT run will die.
+# Distinct from SYNC_AUTH_FAILED so logs/recovery can tell the two apart.
+SYNC_TOKEN_PERSIST_FAILED_FLAG = "SYNC_TOKEN_PERSIST_FAILED.md"
+
+# Explicit opt-out so a missing PAT in GitHub Actions is non-fatal (e.g. an
+# intentionally rotation-disabled run). Without it, missing PAT in Actions is
+# fatal — a silent no-op fallback would resurrect the P0 chronic-failure bug.
+ALLOW_NO_PERSIST_ENV = "XSENSAI_ALLOW_NO_PERSIST"
 
 # Error codes whose presence in `RunResult.rendered_message` triggers the
 # auth-failed flag-write path. Keep the list explicit — easier to audit
@@ -90,6 +102,38 @@ def _auth_failed_recovery_text(run_id: str) -> str:
         "git rm SYNC_AUTH_FAILED.md && git commit -m 'cron: auth recovered'\n"
         "```\n\n"
         "See `docs/CRON_SETUP.md` for the full token-rotation runbook.\n"
+    )
+
+
+def _token_persist_failed_text(run_id: str) -> str:
+    """Static template; never interpolates secrets.
+
+    The run synced fine but the rotated refresh token could not be written
+    back to the GH secret. The token X handed us is single-use and already
+    consumed, so the NEXT run will fail until the secret is refreshed.
+    """
+    return (
+        "# x-sensai: cron token-persist failed (next run will fail)\n\n"
+        f"Run `{run_id}` synced bookmarks successfully, but could NOT save the "
+        "rotated X refresh token back to the GitHub Actions secret. X refresh "
+        "tokens are single-use, so the next scheduled run will fail "
+        "`AUTH_FAILED` until you refresh the secret.\n\n"
+        "## Most likely cause\n\n"
+        "The `XSENSAI_SECRETS_PAT` fine-grained token expired, was revoked, or "
+        "lost its `Secrets:write` permission on this repo.\n\n"
+        "## Recover (on your Mac)\n\n"
+        "```bash\n"
+        "# 1. Re-authorize X API locally\n"
+        "python -m xsensai.sync.setup_oauth --reauth\n\n"
+        "# 2. Re-push the refresh token secret\n"
+        "python -m xsensai.entrypoints.headless --emit-secrets-stdin\n\n"
+        "# 3. Renew XSENSAI_SECRETS_PAT if it expired, then re-push it:\n"
+        "#    gh secret set XSENSAI_SECRETS_PAT --app actions   (paste the new PAT)\n\n"
+        "# 4. Trigger a manual run, then delete this flag when green\n"
+        "gh workflow run sync.yml\n"
+        "git rm SYNC_TOKEN_PERSIST_FAILED.md && git commit -m 'cron: token persistence recovered'\n"
+        "```\n\n"
+        "See `docs/CRON_SETUP.md#token-rotation` for details.\n"
     )
 
 
@@ -142,10 +186,32 @@ def _emit_secrets_stdin() -> int:
     return 0
 
 
-def _check_preflight() -> int:
-    """Verify env + xdk + keychain readiness without burning a token.
+def _in_actions() -> bool:
+    return os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true"
 
-    Used by the workflow as a fast-fail before running real sync.
+
+def _persist_config() -> tuple[str, str, bool]:
+    """Resolve token-persistence config from env: (pat, repo, allow_no_persist).
+
+    Single source of truth shared by `_check_preflight` and `run()` so the two
+    can't drift on which env vars gate self-rotation.
+    """
+    pat = os.environ.get(SECRETS_PAT_ENV, "").strip()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    allow_no_persist = os.environ.get(ALLOW_NO_PERSIST_ENV, "").strip().lower() in (
+        "1", "true", "yes",
+    )
+    return pat, repo, allow_no_persist
+
+
+def _check_preflight() -> int:
+    """Verify env + xdk + secret-write readiness without burning an X token.
+
+    Used by the workflow as a fast-fail before running real sync. Critically,
+    when a PAT is configured this PROVES `Secrets:write` works via a canary
+    secret write/delete BEFORE any single-use X token is consumed — so a
+    broken/expired/wrong-scope PAT is caught while it's still cheap, not after
+    we've burned the X token and can't persist the replacement (Codex #1).
     """
     issues = []
     if not os.environ.get(REFRESH_TOKEN_ENV):
@@ -156,6 +222,29 @@ def _check_preflight() -> int:
         import xdk  # type: ignore[import-untyped]  # noqa: F401
     except ImportError:
         issues.append("xdk not installed (pip install xdk)")
+
+    # Token-persistence preflight.
+    pat, repo, allow_no_persist = _persist_config()
+    if pat and repo:
+        # Log what `gh` we're running against (Codex #8 — preinstalled but not
+        # version-pinned), then prove the PAT can actually write a secret.
+        from xsensai.sync.gh_secrets_updater import gh_diagnostics, verify_secret_write
+        print("gh diagnostics:", file=sys.stderr)
+        for line in gh_diagnostics(pat=pat).splitlines():
+            print(f"    {line}", file=sys.stderr)
+        try:
+            verify_secret_write(repo, pat=pat)
+            print("    canary secret write/delete OK", file=sys.stderr)
+        except XSensaiError as e:
+            issues.append(f"PAT cannot write repo secrets: {e.cause}")
+    elif _in_actions() and not allow_no_persist:
+        # Fatal in CI: a missing PAT means rotation can't persist and the cron
+        # silently resurrects the P0. Opt out with XSENSAI_ALLOW_NO_PERSIST=1.
+        issues.append(
+            f"missing env: {SECRETS_PAT_ENV} (token rotation cannot persist in "
+            f"GitHub Actions; set {ALLOW_NO_PERSIST_ENV}=1 to override)"
+        )
+
     if issues:
         print("PREFLIGHT FAIL", file=sys.stderr)
         for i in issues:
@@ -180,6 +269,47 @@ def _extract_error_code(rendered_message: Optional[str]) -> str:
     if end < 1:
         return "unknown"
     return m[1:end]
+
+
+def _write_and_push_persist_flag(corpus: Path, *, now: datetime) -> None:
+    """Write the TOKEN_PERSIST_FAILED flag and commit/push it (best-effort).
+
+    Heartbeat success/last_error are set by the caller's finalize_run /
+    update_after_run. This only handles the vault-visible recovery flag.
+    """
+    run_id = f"headless-{now.strftime('%Y%m%dT%H%M%SZ')}"
+    flag_path = corpus / SYNC_TOKEN_PERSIST_FAILED_FLAG
+    try:
+        flag_path.write_text(_token_persist_failed_text(run_id))
+    except OSError as e:
+        log.exception("failed to write TOKEN_PERSIST_FAILED flag: %s", e)
+    try:
+        current_status = read_status(corpus)
+        if current_status is not None:
+            git_push.commit_and_push(
+                corpus,
+                message=f"[SYNC_TOKEN_PERSIST_FAILED] {run_id}",
+                in_memory_status=current_status,
+                run_id=run_id,
+            )
+    except Exception:
+        log.exception("failed to commit + push token-persist-failure flag")
+
+
+def _emit_token_persist_failed_flag(corpus: Path, *, now: datetime) -> int:
+    """Success-path persist failure: write+push flag, warn, return exit 1.
+
+    Used by the no-card success paths (empty / no-new). The cards path writes
+    the flag inline so it rides the cards commit.
+    """
+    _write_and_push_persist_flag(corpus, now=now)
+    print(
+        "[TOKEN_PERSIST_FAILED] synced OK but could not persist the rotated X "
+        "token; the next run will fail until re-auth. See "
+        "SYNC_TOKEN_PERSIST_FAILED.md.",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def run(
@@ -216,7 +346,32 @@ def run(
     from xsensai.storage.corpus import resolve_corpus_path
     corpus = resolve_corpus_path(corpus_path)
 
-    token_provider = EnvSecretTokenProvider()
+    # Provider selection (T3 / Codex #4): use the persisting provider when a
+    # PAT + repo are available so rotation closes the loop. In GitHub Actions a
+    # missing PAT is FATAL (a silent no-op fallback would resurrect the P0
+    # chronic-failure bug) unless explicitly opted out.
+    pat, repo, allow_no_persist = _persist_config()
+    if pat and repo:
+        token_provider: EnvSecretTokenProvider = GhSecretTokenProvider(repo=repo, pat=pat)
+        log.info("token persistence: ENABLED via GH secret on %s", repo)
+    else:
+        if _in_actions() and not allow_no_persist:
+            print(
+                "[TOKEN_PERSIST_FAILED] running in GitHub Actions but "
+                f"{SECRETS_PAT_ENV} / GITHUB_REPOSITORY is missing; a rotated X "
+                "token could not be persisted and the cron would silently break "
+                f"on the next run. Set {SECRETS_PAT_ENV} (see "
+                f"docs/CRON_SETUP.md#token-rotation) or {ALLOW_NO_PERSIST_ENV}=1 "
+                "to override.",
+                file=sys.stderr,
+            )
+            return 2
+        token_provider = EnvSecretTokenProvider()
+        log.warning(
+            "token persistence: DISABLED (no %s) — a rotated X token will NOT "
+            "be saved; the next run may fail AUTH_FAILED.",
+            SECRETS_PAT_ENV,
+        )
     deferred = DeferredExtractor()
     # NB: BudgetTracker constructed but not threaded into service.run
     # yet — see module docstring + autoplan E9 known limitation.
@@ -293,6 +448,16 @@ def run(
             log.exception("failed to commit + push auth-failure flag")
         return 2
 
+    # Token-persist-failure detection (T4 / Codex #5): the rotated token is
+    # single-use and already consumed by X, so a failed writeback means THIS
+    # run synced fine but the NEXT run dies AUTH_FAILED. Surfaced on EVERY
+    # success return below (empty / no-new / cards), not just the cards path.
+    persist_failed = (
+        isinstance(token_provider, GhSecretTokenProvider)
+        and token_provider.last_persist_error is not None
+    )
+    persist_last_error = "TOKEN_PERSIST_FAILED" if persist_failed else None
+
     if run_result.status == "empty":
         # No new bookmarks since last sync. Per CLAUDE.md spec:
         # "Exit codes: 0 full / 0 no-new / 1 partial / 2 fatal".
@@ -300,16 +465,19 @@ def run(
         # consecutive_cron_failures), no commit/push, exit 0.
         _service.finalize_run(
             run_id=run_result.run_id,
-            success=True,
+            success=not persist_failed,
             n_new_cards=0,
             extraction_inline=0,
             extraction_pending=0,
             threads_unfetched_this_run=run_result.threads_unfetched_this_run,
+            last_error=persist_last_error,
             corpus_path=corpus,
             duration_ms=run_result.duration_ms,
             mode="headless",
             cron_runner=runner,
         )
+        if persist_failed:
+            return _emit_token_persist_failed_flag(corpus, now=now)
         print(
             "[INFO/CRON_NO_NEW_BOOKMARKS] cron found no new bookmarks since last run.",
             file=sys.stderr,
@@ -319,6 +487,10 @@ def run(
     if run_result.status != "ok":
         # Generic non-auth failure path. Heartbeat update only —
         # finalize_run skipped because we don't trust the partial state.
+        # Persist-failure check (Claude review F6): rotation happens at first
+        # auth (before sync work), so the token can be consumed + writeback
+        # failed even when the run later returns a non-ok status. Surface it so
+        # the next-run AUTH_FAILED is explained instead of silent.
         existing = read_status(corpus)
         update_after_run(
             corpus,
@@ -328,9 +500,17 @@ def run(
             total_cards=existing.total_cards if existing else 0,
             now=now,
             cron_runner=runner,
-            last_error=_extract_error_code(msg),
+            last_error="TOKEN_PERSIST_FAILED" if persist_failed else _extract_error_code(msg),
         )
-        if msg:
+        if persist_failed:
+            _write_and_push_persist_flag(corpus, now=now)
+            print(
+                "[TOKEN_PERSIST_FAILED] run failed AND the rotated X token could "
+                "not be persisted; re-auth needed before the next run. See "
+                "SYNC_TOKEN_PERSIST_FAILED.md.",
+                file=sys.stderr,
+            )
+        elif msg:
             print(msg, file=sys.stderr)
         return 2
 
@@ -343,11 +523,12 @@ def run(
     # cron_runner mirror), checkpoint archive, reindex trigger, log append.
     _service.finalize_run(
         run_id=run_result.run_id,
-        success=True,
+        success=not persist_failed,
         n_new_cards=n_new_cards,
         extraction_inline=0,
         extraction_pending=n_pending,
         threads_unfetched_this_run=run_result.threads_unfetched_this_run,
+        last_error=persist_last_error,
         corpus_path=corpus,
         duration_ms=run_result.duration_ms,
         mode="headless",
@@ -355,11 +536,26 @@ def run(
     )
 
     if n_new_cards == 0:
+        if persist_failed:
+            return _emit_token_persist_failed_flag(corpus, now=now)
         print(
             "[INFO/CRON_NO_NEW_BOOKMARKS] cron found no new bookmarks since last run.",
             file=sys.stderr,
         )
         return 0
+
+    # If the rotated token couldn't be persisted, write the flag NOW so it
+    # rides the same cards commit below (.md is in the push allowlist). The
+    # cards still ship; the flag warns that the next run will fail.
+    if persist_failed:
+        try:
+            (corpus / SYNC_TOKEN_PERSIST_FAILED_FLAG).write_text(
+                _token_persist_failed_text(
+                    f"headless-{now.strftime('%Y%m%dT%H%M%SZ')}"
+                )
+            )
+        except OSError as e:
+            log.exception("failed to write TOKEN_PERSIST_FAILED flag: %s", e)
 
     # Commit + push. The in_memory_status used by heartbeat fast-path
     # is fresh (just written by finalize_run).
@@ -375,6 +571,14 @@ def run(
         run_id=run_result.run_id,
     )
     if push_result.success:
+        if persist_failed:
+            print(
+                "[TOKEN_PERSIST_FAILED] synced + pushed cards, but could not "
+                "persist the rotated X token; the next run will fail until "
+                "re-auth. See SYNC_TOKEN_PERSIST_FAILED.md.",
+                file=sys.stderr,
+            )
+            return 1
         return 0
     if push_result.conflict_unresolved:
         if push_result.error:

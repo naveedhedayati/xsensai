@@ -188,9 +188,15 @@ gh workflow run sync.yml
 
 | Flag file | Meaning | Recovery |
 |---|---|---|
-| `SYNC_AUTH_FAILED.md` | Refresh token rotated/expired | Run `python -m xsensai.sync.setup_oauth --reauth` on Mac, then `gh secret set XSENSAI_X_REFRESH_TOKEN`. Then `git rm SYNC_AUTH_FAILED.md`. |
+| `SYNC_AUTH_FAILED.md` | Refresh token rotated/expired (couldn't refresh) | Run `python -m xsensai.sync.setup_oauth --reauth` on Mac, then `gh secret set XSENSAI_X_REFRESH_TOKEN`. Then `git rm SYNC_AUTH_FAILED.md`. |
+| `SYNC_TOKEN_PERSIST_FAILED.md` | Synced OK but couldn't save the rotated token to the GH secret (PAT expired/revoked) — **next run will fail** | Renew `XSENSAI_SECRETS_PAT`, re-push `XSENSAI_X_REFRESH_TOKEN`, re-run. See `docs/CRON_SETUP.md#token-rotation`. |
 | `SYNC_PUSH_REJECTED.md` | Cron's push lost the race after 3 retries | `git pull --rebase` on Mac, resolve, push, re-trigger workflow. |
 | `_conflicts/<run-id>/` | Cross-host conflict — cards manually merged | See `docs/CONFLICT_RESOLUTION.md`. |
+
+> **Self-rotation:** with `XSENSAI_SECRETS_PAT` configured the cron now
+> persists rotated single-use X refresh tokens back to the GH secret
+> automatically — `SYNC_AUTH_FAILED.md` should be rare. See
+> `docs/CRON_SETUP.md#token-rotation`.
 
 ## Mutation safety
 

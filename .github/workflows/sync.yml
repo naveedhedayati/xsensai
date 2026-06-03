@@ -106,7 +106,13 @@ jobs:
           git config user.email "xsensai-cron@github-actions.local"
           git config user.name "x-sensai cron"
 
-      - name: Preflight check (env + xdk)
+      - name: Preflight check (env + xdk + secret-write canary)
+        env:
+          # Fine-grained PAT (Secrets:write on THIS repo only) used to persist
+          # the rotated X refresh token. Preflight proves it can write a secret
+          # via a throwaway canary BEFORE any single-use X token is consumed.
+          # NOT the built-in GITHUB_TOKEN — it cannot write Actions secrets.
+          XSENSAI_SECRETS_PAT: ${{ secrets.XSENSAI_SECRETS_PAT }}
         run: python -m xsensai.entrypoints.headless --check
 
       - name: Run headless sync (this is the load-bearing step)
@@ -121,6 +127,10 @@ jobs:
           # Cost cap: per-attempt, default 200. Workflow-level retry must
           # be 0 (see autoplan E9).
           XSENSAI_CRON_API_CAP: "200"
+          # Self-rotation (P0 fix): persist the rotated single-use X refresh
+          # token back to this secret so the next run can use it. Without it,
+          # the cron works exactly once between manual re-auths.
+          XSENSAI_SECRETS_PAT: ${{ secrets.XSENSAI_SECRETS_PAT }}
         run: python -m xsensai.entrypoints.headless
 
       - name: Show heartbeat (forensic; no secret leakage)

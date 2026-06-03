@@ -201,6 +201,24 @@ Append to your input (anywhere in the line):
 - `proceed dirty` / `dirty ok` — sync anyway when prior xsync left uncommitted output
 - `preview` / `dry-run` — fetch the bookmark list but write nothing
 
+## Cron coexistence (token rotation)
+
+X refresh tokens are single-use. A manual `/xsync` that refreshes the token
+rotates it in your **macOS Keychain**, but the **GitHub Actions cron** reads
+the token from a separate GitHub secret. So after a manual sync, the cron's
+stored secret is stale and the next scheduled run will fail `AUTH_FAILED`
+until you re-push it.
+
+If you run the cron, after a manual `/xsync` that rotated the token (the run
+logs `X refresh token rotated and saved to Keychain`), re-push the secret:
+
+```bash
+python -m xsensai.entrypoints.headless --emit-secrets-stdin
+```
+
+(Symmetric dual-write — local sync also updating the GitHub secret — is a
+planned follow-up; see TODOS.md. Full runbook: `docs/CRON_SETUP.md#token-rotation`.)
+
 ## Footer
 
 After emitting the final summary, append exactly this line:

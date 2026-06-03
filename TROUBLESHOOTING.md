@@ -501,7 +501,11 @@ includes the run-id; look in `_conflicts/<run-id>/` for sidecars.
 ## `[SYNC_AUTH_FAILED]` — refresh token rotated
 
 **Cause**: X rotated your OAuth refresh token (or you revoked the dev
-app). Cron can no longer refresh, all subsequent runs fail.
+app) and the cron could not refresh. With self-rotation configured
+(`XSENSAI_SECRETS_PAT`), this should now be **rare** — it usually means the
+PAT expired, the crash-window was hit (process killed between X consuming the
+old token and the secret write landing), or a local `/xsync` rotated the
+token without re-pushing the secret.
 
 **Recover** (on Mac):
 ```bash
@@ -511,7 +515,10 @@ python -m xsensai.sync.setup_oauth --reauth
 # 2. Update GitHub Actions secret (shell-portable form).
 security find-generic-password -s x-sensai \
   -a x-api-refresh-token -w \
-  | gh secret set XSENSAI_X_REFRESH_TOKEN --body -
+  | gh secret set XSENSAI_X_REFRESH_TOKEN --app actions
+
+# 2b. If XSENSAI_SECRETS_PAT expired, renew it (see CRON_SETUP.md#token-rotation):
+gh secret set XSENSAI_SECRETS_PAT --app actions
 
 # 3. Verify with a manual run.
 gh workflow run sync.yml
@@ -525,6 +532,52 @@ git push origin main
 ```
 
 The flag file's recovery instructions repeat these steps.
+
+---
+
+## `[TOKEN_PERSIST_FAILED]` — synced OK but couldn't save the rotated token
+
+**Cause**: the run synced bookmarks fine, but the rotated X refresh token
+could not be written back to the `XSENSAI_X_REFRESH_TOKEN` GitHub secret —
+almost always because `XSENSAI_SECRETS_PAT` expired, was revoked, or lost its
+`Secrets:write` scope. X refresh tokens are single-use, so **the next run will
+fail `AUTH_FAILED`** unless you fix it. The cron writes
+`SYNC_TOKEN_PERSIST_FAILED.md` and marks the heartbeat failed so the staleness
+banner fires immediately (exit code 1 — partial).
+
+**Recover** (on Mac):
+```bash
+# 1. Renew the fine-grained PAT if it expired (Settings -> Developer settings
+#    -> Fine-grained tokens; Secrets: Read and write on this repo only), then:
+gh secret set XSENSAI_SECRETS_PAT --app actions
+
+# 2. Re-auth + re-push the refresh token (the run already consumed the old one).
+python -m xsensai.sync.setup_oauth --reauth
+security find-generic-password -s x-sensai \
+  -a x-api-refresh-token -w \
+  | gh secret set XSENSAI_X_REFRESH_TOKEN --app actions
+
+# 3. Verify + clean the flag.
+gh workflow run sync.yml && gh run watch
+cd /path/to/your/vault && git pull origin main
+git rm SYNC_TOKEN_PERSIST_FAILED.md && git commit -m "cron: token persistence recovered" && git push
+```
+
+**Prevent**: set the longest PAT expiry you're comfortable with. See
+`docs/CRON_SETUP.md#token-rotation`.
+
+---
+
+## `[GH_SECRET_WRITE_FAILED]` — couldn't write the GitHub Actions secret
+
+**Cause**: the `gh secret set` call failed (PAT missing/expired/wrong-scope,
+`gh` not on PATH, or a GitHub API error). Surfaced in cron logs and rolled up
+into `[TOKEN_PERSIST_FAILED]` above. The preflight (`--check`) canary catches
+most of these before any X token is consumed.
+
+**Recover**: confirm `XSENSAI_SECRETS_PAT` is a fine-grained token with
+`Secrets: write` on this repo and hasn't expired; re-run
+`python -m xsensai.entrypoints.headless --check` to verify the canary passes.
 
 ---
 
