@@ -79,6 +79,9 @@ ErrorCode = Literal[
     "CRON_CONFLICT_UNRESOLVED",
     "SYNC_PUSH_REJECTED",
     "SYNC_AUTH_FAILED",
+    # Cron self-rotating refresh token (P0 — fine-grained PAT writeback)
+    "GH_SECRET_WRITE_FAILED",
+    "TOKEN_PERSIST_FAILED",
     # Slice 6 — tombstone + setup wizard
     "TOMBSTONE_BLOCKED",
     "NO_ROLLBACK_JOURNAL",
