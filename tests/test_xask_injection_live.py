@@ -53,9 +53,10 @@ def injection_corpus(tmp_path, monkeypatch):
     import subprocess
     from xsensai.retrieval import qmd as qmd_mod
 
-    qmd_bin = os.environ.get("XSENSAI_QMD_PATH", "/Users/naveedhedayati/.bun/bin/qmd")
-    if not Path(qmd_bin).exists():
-        pytest.skip(f"QMD binary not found at {qmd_bin}")
+    import shutil
+    qmd_bin = os.environ.get("XSENSAI_QMD_PATH") or shutil.which("qmd")
+    if not qmd_bin:
+        pytest.skip("qmd binary not found ($XSENSAI_QMD_PATH / PATH)")
 
     corpus = tmp_path / "corpus"
     corpus.mkdir()

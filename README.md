@@ -20,7 +20,7 @@ x-sensai treats your bookmarks as a first-class personal corpus:
 
 - **Sync** pulls new bookmarks (and the threads they belong to) from X via the official API, on a schedule.
 - **Cards** are plain markdown files with frontmatter — version-controllable, greppable, portable, no proprietary database.
-- **Retrieval** runs locally over a [QMD](https://github.com/tobi/qmd)-backed BM25 index, and surfaces results with `[B]` (bookmark) and `[P]` (pinned) reference markers Claude can cite.
+- **Retrieval** runs locally over a [QMD](https://github.com/tobi/qmd)-backed BM25 index, and surfaces results with `[B]` (bookmark) and `[P]` (pasted) reference markers Claude can cite.
 - **Synthesis** stays in Claude's hands — there is no server-side LLM key, no usage-based AI billing inside x-sensai itself.
 
 The result: ask Claude something in your wheelhouse, and instead of hallucinating a summary of generic web wisdom, it grounds its answer in the specific posts you already vetted.
@@ -99,7 +99,7 @@ A fuller catalog of error codes and override vocabulary is in [TROUBLESHOOTING.m
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/naveedhedayati/xsensai.git
+git clone https://github.com/YOUR_USERNAME/xsensai.git   # your fork
 cd xsensai
 python3.11 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -149,7 +149,7 @@ Restart Claude.
 
 ### 5. Smoke test
 
-In Claude Code, type `/xfind` and search for any keyword. If the corpus is empty, you'll get a `[CORPUS_EMPTY]` message — expected. Add a card with `/xpaste` and try again.
+In Claude Code, type `/xfind` and search for any keyword. A brand-new corpus is empty, so you'll get *no results* — that's expected, not an error. Add a card with `/xpaste` (or run sync, below) and try again.
 
 ### 6. Set up sync (optional)
 
@@ -207,7 +207,7 @@ The full override vocabulary is in `commands/xsync.md` and surfaced via `/xhelp`
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `XSENSAI_CORPUS_PATH` | `~/Documents/Vault/04_areas/x-bookmarks` | Where cards live. |
+| `XSENSAI_CORPUS_PATH` | `~/.local/share/xsensai/corpus` | Where cards live (point this at your Obsidian vault's bookmarks folder). |
 | `XSENSAI_QMD_PATH` | (auto-detected) | Path to the `qmd` binary. |
 | `XSENSAI_X_CLIENT_ID` | — | Your X dev app client_id (required for sync). |
 | `XSENSAI_X_CLIENT_SECRET` | — | Required only for X "Confidential" client apps. |

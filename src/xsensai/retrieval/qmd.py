@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
@@ -28,14 +29,18 @@ from xsensai.errors import XSensaiError
 
 log = logging.getLogger(__name__)
 
-DEFAULT_QMD_PATH = "/Users/naveedhedayati/.bun/bin/qmd"
 COLLECTION_NAME = "xsensai-cards"
 QMD_TIMEOUT_SEC = 10.0
 QMD_UPDATE_TIMEOUT_SEC = 30.0  # reindex can be slower than query
 
 
-def get_qmd_path() -> str:
-    return os.environ.get("XSENSAI_QMD_PATH", DEFAULT_QMD_PATH)
+def get_qmd_path() -> Optional[str]:
+    """Resolve the qmd binary: $XSENSAI_QMD_PATH → `qmd` on $PATH → None.
+
+    No author-specific default. Returns None when qmd cannot be located so
+    callers raise a loud QMD_NOT_FOUND (query) or degrade best-effort (update).
+    """
+    return os.environ.get("XSENSAI_QMD_PATH") or shutil.which("qmd")
 
 
 @dataclass(frozen=True)
@@ -170,6 +175,17 @@ async def query(text: str, limit: int = 20, qmd_path: Optional[str] = None) -> L
     XSensaiError(INTERNAL_ERROR) on subprocess failure / timeout / schema drift.
     """
     bin_path = qmd_path or get_qmd_path()
+    if not bin_path:
+        raise XSensaiError(
+            code="QMD_NOT_FOUND",
+            cause="QMD binary not found on $PATH and $XSENSAI_QMD_PATH is unset",
+            attempted="locate qmd (shutil.which / $XSENSAI_QMD_PATH)",
+            next_action=(
+                "Install QMD via 'bun install -g qmd', or set $XSENSAI_QMD_PATH "
+                "to your installed binary."
+            ),
+            retryable=False,
+        )
     args = [
         bin_path, "search", text,
         "--json",
@@ -187,7 +203,7 @@ async def query(text: str, limit: int = 20, qmd_path: Optional[str] = None) -> L
         )
     except FileNotFoundError as e:
         raise XSensaiError(
-            code="INTERNAL_ERROR",
+            code="QMD_NOT_FOUND",
             cause=f"QMD binary not found at {bin_path}",
             attempted=f"exec {bin_path}",
             next_action=(
@@ -211,7 +227,7 @@ async def query(text: str, limit: int = 20, qmd_path: Optional[str] = None) -> L
             code="INTERNAL_ERROR",
             cause=f"QMD query timed out after {QMD_TIMEOUT_SEC}s",
             attempted=f"qmd search {text!r}",
-            next_action="Re-run /xfind; if it persists, check `qmd status` for index health.",
+            next_action="Re-run the search (`search_bookmarks` / `/xfind`); if it persists, run `qmd status` to check index health.",
             retryable=True,
         )
 
@@ -249,6 +265,9 @@ async def update(qmd_path: Optional[str] = None) -> None:
     stale index rather than failing the user's query.
     """
     bin_path = qmd_path or get_qmd_path()
+    if not bin_path:
+        log.warning("qmd update: binary not found on $PATH / $XSENSAI_QMD_PATH; index stale")
+        return
     args = [bin_path, "update", "-c", COLLECTION_NAME]
     log.info("qmd update: collection=%s", COLLECTION_NAME)
 
@@ -290,7 +309,6 @@ async def update(qmd_path: Optional[str] = None) -> None:
 __all__ = [
     "QMDHit",
     "COLLECTION_NAME",
-    "DEFAULT_QMD_PATH",
     "QMD_TIMEOUT_SEC",
     "QMD_UPDATE_TIMEOUT_SEC",
     "get_qmd_path",

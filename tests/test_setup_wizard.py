@@ -36,10 +36,15 @@ def _run_wizard(args):
 
 
 class TestMutualExclusion:
-    def test_no_mode_fails(self, tmp_state):
+    def test_no_mode_does_not_argparse_crash(self, tmp_state):
+        # PR-1 (P0-4a): a bare invocation must NOT crash with the argparse
+        # mutually-exclusive "one of the arguments ... is required" error — it
+        # falls through to the guided flow (which may then fail for its own
+        # reasons, e.g. missing config / non-macOS, but never an argparse usage
+        # crash). This is the fix for the "./scripts/setup.sh crashes" bug.
         result = _run_wizard([])
-        assert result.returncode != 0
-        assert "required" in result.stderr.lower() or "one of" in result.stderr.lower()
+        assert "one of the arguments" not in result.stderr
+        assert "is required" not in result.stderr.lower()
 
     def test_two_modes_fails(self, tmp_state):
         result = _run_wizard(["--preflight", "--oauth"])

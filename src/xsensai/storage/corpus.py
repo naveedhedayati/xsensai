@@ -46,7 +46,13 @@ from xsensai.storage import v1_adapter
 log = logging.getLogger(__name__)
 
 
-DEFAULT_CORPUS_PATH = "/Users/naveedhedayati/Documents/Vault/04_areas/x-bookmarks"
+def _neutral_default_corpus_path() -> Path:
+    """Home-relative default corpus location when $XSENSAI_CORPUS_PATH is unset.
+
+    Computed lazily (not a module constant) so a monkeypatched $HOME resolves
+    correctly in tests. NEVER an author-specific path.
+    """
+    return Path.home() / ".local" / "share" / "xsensai" / "corpus"
 
 # Per Eng review: strict regex for MCP-supplied card ids. No path separators,
 # no leading dot, no NUL, only the chars our slug/disambiguator can produce.
@@ -110,8 +116,11 @@ def _walk_card_files(corpus: Path) -> List[Path]:
 
 
 def get_corpus_path() -> Path:
-    """Resolve the corpus path from $XSENSAI_CORPUS_PATH or default."""
-    return Path(os.environ.get("XSENSAI_CORPUS_PATH", DEFAULT_CORPUS_PATH))
+    """Resolve the corpus path from $XSENSAI_CORPUS_PATH, or a neutral
+    home-relative default (~/.local/share/xsensai/corpus). Never an
+    author-specific path."""
+    env = os.environ.get("XSENSAI_CORPUS_PATH")
+    return Path(env) if env else _neutral_default_corpus_path()
 
 
 def resolve_corpus_path(corpus_path: Optional[Path] = None) -> Path:
@@ -119,8 +128,21 @@ def resolve_corpus_path(corpus_path: Optional[Path] = None) -> Path:
 
     Raises XSensaiError(CORPUS_UNAVAILABLE) if the path doesn't exist or
     isn't a directory. Distinguishes 'broken corpus' from 'empty corpus'.
+
+    Asymmetric auto-create: when $XSENSAI_CORPUS_PATH is UNSET and no explicit
+    path is passed, the neutral default is created on demand (a fresh install
+    starts on an empty-but-valid corpus). A SET-but-missing $XSENSAI_CORPUS_PATH
+    still fails loud — a typo'd path must not silently spawn an empty corpus.
     """
-    p = corpus_path if corpus_path is not None else get_corpus_path()
+    if corpus_path is not None:
+        p = corpus_path
+    else:
+        p = get_corpus_path()
+        if os.environ.get("XSENSAI_CORPUS_PATH") is None and not p.exists():
+            try:
+                p.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass  # fall through to the CORPUS_UNAVAILABLE raise below
     try:
         resolved = p.resolve(strict=True)
     except (FileNotFoundError, OSError) as e:
@@ -707,7 +729,6 @@ def load_card_by_id(
 
 
 __all__ = [
-    "DEFAULT_CORPUS_PATH",
     "get_corpus_path",
     "resolve_corpus_path",
     "load_card",

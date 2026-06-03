@@ -486,7 +486,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="setup_wizard",
         description="Slice 6 guided setup wizard for x-sensai.",
     )
-    g = p.add_mutually_exclusive_group(required=True)
+    # required=False so a bare `./scripts/setup.sh` (no flag) does NOT crash
+    # with an argparse error — it falls through to the full guided flow.
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--preflight", action="store_true")
     g.add_argument("--oauth", action="store_true")
     g.add_argument("--deploy-key", action="store_true")
@@ -505,6 +507,22 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    # Step 0: macOS-only guard. Fail loud up front (not mid-install) on a
+    # non-Darwin platform — x-sensai relies on the macOS Keychain and
+    # F_FULLFSYNC for crash-safe sidecar writes.
+    if sys.platform != "darwin":
+        err = XSensaiError(
+            code="UNSUPPORTED_PLATFORM",
+            cause=f"x-sensai is macOS-only; detected platform {sys.platform!r}",
+            attempted="setup_wizard step 0 (platform check)",
+            next_action=(
+                "Run x-sensai on macOS. It uses the macOS Keychain for secrets "
+                "and F_FULLFSYNC for crash-safe writes; Linux/Windows are not supported."
+            ),
+            retryable=False,
+        )
+        print(err.format(), file=sys.stderr)
+        return 2
     args = _build_parser().parse_args()
     state = _load_state()
     if args.preflight:
@@ -523,7 +541,10 @@ def main() -> int:
         return cmd_migrate(state, dry_run=args.migrate_dry_run)
     if args.all or args.resume:
         return cmd_all(state, args.vault_repo)
-    return 1
+    # No subcommand flag → default to the full guided flow rather than crashing.
+    # (The core-install steps — corpus/QMD/MCP — land in PR-2; today --all runs
+    # the cron/setup steps, which is the safe default for a bare invocation.)
+    return cmd_all(state, args.vault_repo)
 
 
 if __name__ == "__main__":
