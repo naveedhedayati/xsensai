@@ -2,6 +2,48 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.4.0] - 2026-06-03
+
+Value-validation pass for `/xask`: measures retrieval quality honestly and adds a
+groundedness gate so a synthesized answer has to be backed by your cards (or say it
+can't be), not just well-formatted. Went through the full gstack pipeline this
+session — `/review` plus a Codex cross-model adversarial pass.
+
+### Added
+
+- **Groundedness gate for `/xask` (CV-6).** `xask_validate` takes an optional
+  `candidate_card_ids` (pass `meta["rerank_winners"]` from `xask_prepare`); when you
+  do, an answer must either explicitly **abstain** ("your corpus doesn't cover this")
+  or **cite at least 2 distinct cards** AND back every `## Synthesis` line with an
+  inline `[B]/[P]` reference or a `(no corpus support — general knowledge)` hedge.
+  Distinct cards are counted against the ids the tool actually returned, scoped to the
+  `## References` block (AD-E7). Omit the ids and only the structural checks run, so
+  existing hosts are unaffected. The check is deterministic and offline — no LLM judge.
+- **Honest retrieval eval (CV-3).** The golden-set eval now reports **top-1, top-3, and
+  MRR separately** over both keyword and **paraphrase** queries (low lexical overlap),
+  against a corpus salted with **hard-negative** distractor cards. The paraphrase split
+  is tracked as a diagnostic that exposes the BM25 semantic ceiling (it is ~0 today by
+  design, since vector search is off) and a precision guard fails the run if a
+  distractor outranks a true answer.
+
+### Changed
+
+- **`/xask` output contract.** The synthesis prompt and `HARD_RULES` now instruct
+  bulleted `[B]/[P]` reference lines and inline-cited (or hedged) synthesis lines, and
+  the prompt tells the host to abstain rather than pad when the corpus is thin.
+  `PROMPT_TEMPLATE_VERSION` bumped `1.0.0` → `1.2.0`.
+- **`xsensai-eval-history`** renders both the hit-rate and MRR record shapes, showing
+  keyword/paraphrase MRR columns.
+
+### Fixed
+
+- **References bullet mismatch (AD-E7).** The prompt previously told the host to "use
+  the format_reference() format" (no bullet) while the validator only counted bulleted
+  lines, so a faithful answer failed validation on the first call. The prompt now
+  requires the leading `- `, matching the validator.
+- **`xsensai-eval-history`** no longer crashes on a non-string `ts` field and no longer
+  renders a boolean metric as a percentage.
+
 ## [0.9.3.0] - 2026-06-03
 
 Repo-readiness pass: de-personalizes the codebase so anyone can fork and run it,
