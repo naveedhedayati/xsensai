@@ -88,7 +88,7 @@ A fuller catalog of error codes and override vocabulary is in [TROUBLESHOOTING.m
 - **Python 3.11+**.
 - **[bun](https://bun.sh)** to install QMD.
 - **[QMD](https://github.com/tobi/qmd)** as the search backend (`bun install -g qmd`).
-- **[Claude Code](https://docs.claude.com/en/docs/claude-code)** or Claude Desktop with MCP support.
+- **An MCP host** — [Claude Code](https://docs.claude.com/en/docs/claude-code), Claude Desktop, or **Codex**. Claude Code adds the slash commands (`/xfind`, `/xask`, …); other hosts drive the MCP tools directly (see [AGENTS.md](./AGENTS.md)).
 - For sync (optional): **an X developer account** with API access. Initial credit purchase is ~$10; steady-state cost for ~50 bookmarks/month is roughly $1.18/month.
 - For `/xask` web context (optional): the [`last30days`](https://github.com/mvanhorn/last30days-skill) Claude skill installed at `~/.claude/skills/last30days/`.
 
@@ -127,25 +127,37 @@ This:
 - Wires the `permissions.ask` gate for destructive MCP tools into `~/.claude/settings.json`.
 - Reports any v1-format cards that need migration.
 
-### 4. Register the MCP server with Claude
+### 4. Register the MCP server (Claude Code or Codex)
 
-Add to your Claude MCP config (Claude Desktop: `~/Library/Application Support/Claude/claude_desktop_config.json`):
+x-sensai is an MCP server, so it works in any MCP host. All three options below
+point at the same `xsensai-mcp` console script. **Codex and Claude Code are both
+first-class** — see [AGENTS.md](./AGENTS.md) for the agent-driven guide (the
+tool-only path, including the `/xask` `xask_prepare` → synthesize → `xask_validate`
+loop a Codex user follows).
 
-```json
-{
-  "mcpServers": {
-    "xsensai": {
-      "command": "/absolute/path/to/xsensai/.venv/bin/xsensai-mcp",
-      "env": {
-        "XSENSAI_CORPUS_PATH": "/absolute/path/to/your/bookmarks-vault",
-        "XSENSAI_QMD_PATH": "/absolute/path/to/qmd"
+- **Claude Code** — `claude mcp add xsensai -- /absolute/path/to/xsensai/.venv/bin/xsensai-mcp`, or just open the repo: a project-scoped `.mcp.json` ships in the root and is auto-discovered.
+- **Codex** — add to `~/.codex/config.toml`:
+  ```toml
+  [mcp_servers.xsensai]
+  command = "/absolute/path/to/xsensai/.venv/bin/xsensai-mcp"
+  # env = { XSENSAI_CORPUS_PATH = "/absolute/path/to/your/bookmarks-vault" }
+  ```
+- **Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+  ```json
+  {
+    "mcpServers": {
+      "xsensai": {
+        "command": "/absolute/path/to/xsensai/.venv/bin/xsensai-mcp",
+        "env": {
+          "XSENSAI_CORPUS_PATH": "/absolute/path/to/your/bookmarks-vault",
+          "XSENSAI_QMD_PATH": "/absolute/path/to/qmd"
+        }
       }
     }
   }
-}
-```
+  ```
 
-Restart Claude.
+Restart the host. Then confirm the tools loaded (list tools / `tools/list`) — `xask_prepare` should be present.
 
 ### 5. Smoke test
 
@@ -265,12 +277,16 @@ src/xsensai/         Python package
   entrypoints/       Headless cron orchestrator
   locks/             File-locking + atomic-write primitives
 
+AGENTS.md            Agent guide (Codex + Claude Code); CLAUDE.md is the Claude-Code twin
 commands/            Slash command source files
 tests/               pytest suite
 scripts/             Setup, install, migration helpers
-docs/                CRON_SETUP, CONFLICT_RESOLUTION, PERMISSIONS_ASK
+docs/                ARCHITECTURE, CRON_SETUP, CONFLICT_RESOLUTION, PERMISSIONS_ASK
 .github/workflows/   CI + scheduled sync
 ```
+
+Design detail (card model, retrieval pipeline, why there's no server-side LLM key):
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ---
 
