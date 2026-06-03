@@ -243,3 +243,28 @@ def test_troubleshooting_covers_new_oauth_codes(docs):
         "X_API_NETWORK_ERROR",
     ]:
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_version_sources_agree():
+    """VERSION file, xsensai.__version__, and pyproject [project].version must
+    all be identical.
+
+    Closes the P3 drift surfaced by the 2026-06-02 whole-project test pass:
+    VERSION read 0.9.1.1 while _version.py + pyproject lagged at 0.9.1.0. The
+    existing guard (test_changelog_has_entry_for_current_version) checks VERSION
+    against the CHANGELOG but never against the packaged version — so the three
+    could (and did) drift apart silently. This pins all three together.
+    """
+    import tomllib
+
+    from xsensai import __version__ as code_version
+
+    version_file = (PROJECT_ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    with (PROJECT_ROOT / "pyproject.toml").open("rb") as f:
+        pyproject_version = tomllib.load(f)["project"]["version"]
+
+    assert version_file == code_version == pyproject_version, (
+        f"version sources disagree: VERSION={version_file!r} "
+        f"xsensai.__version__={code_version!r} pyproject={pyproject_version!r}. "
+        f"Bump all three together."
+    )

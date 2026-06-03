@@ -13,10 +13,12 @@ contention surface that Slice 4 cron will hit.
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,27 @@ pytestmark = pytest.mark.skipif(
 
 # Subprocess worker — runs in a fresh Python interpreter via -c so we
 # exercise real cross-process flock semantics, not within-process.
+#
+# Readiness barrier (see _spawn_workers): each cold interpreter writes a
+# ready-marker AFTER its imports finish, then blocks until the parent drops a
+# `go` file. Without the barrier, slow+variable interpreter startup (importing
+# pydantic/mcp/etc.) staggers the workers — an early winner can acquire AND
+# release the briefly-held lock before a late starter even reaches the flock
+# call. That produces multiple "winners" that never actually held the lock at
+# the same instant: a false failure of a sound lock. The barrier forces all
+# workers to contend inside the same tiny window, which is the real thing under
+# test. _spawn_workers fails loud if the barrier can't synchronize rather than
+# silently running a degraded (staggered) round that could false-fail.
+
+# Timing tunables, shared by the parent and the worker template so the two
+# deadlines can't drift. GATE_DEADLINE_S is generous on purpose: it must exceed
+# worst-case cold-interpreter startup for `count` workers on a loaded runner.
+GATE_DEADLINE_S = 15.0
+LOCK_HOLD_S = 0.2
+GATE_POLL_S = 0.002
+READY_POLL_S = 0.005
+COMMUNICATE_TIMEOUT_S = 20.0
+
 WORKER_SCRIPT = """
 import json
 import os
@@ -41,13 +64,25 @@ from xsensai.locks import filelock
 from pathlib import Path
 
 corpus = Path({corpus!r})
-result = {{"pid": os.getpid(), "acquired": False, "error_code": None}}
+gate = Path({gate!r})
+result = {{"pid": os.getpid(), "acquired": False, "error_code": None, "gate_timeout": False}}
+
+# Signal "imports done, parked at the gate", then wait for the release.
+(gate / ("ready.%d" % os.getpid())).write_text("1")
+_deadline = time.monotonic() + {gate_deadline}
+while not (gate / "go").exists():
+    if time.monotonic() > _deadline:
+        result["gate_timeout"] = True
+        break
+    time.sleep({gate_poll})
+
 try:
     with filelock.with_card_write_lock(corpus, "xpaste") as h:
         result["acquired"] = True
         result["token"] = h.token
-        # Hold the lock briefly so other workers contend
-        time.sleep(0.1)
+        # Hold long enough that every co-released worker attempts (and fails)
+        # while we still hold. All workers cleared the gate microseconds apart.
+        time.sleep({hold})
 except XSensaiError as e:
     result["error_code"] = e.code
 
@@ -56,11 +91,25 @@ print(json.dumps(result))
 
 
 def _spawn_workers(corpus: Path, count: int) -> list[dict]:
-    """Spawn `count` subprocesses simultaneously, all racing for the lock.
-    Returns parsed result dicts (one per subprocess).
+    """Spawn `count` subprocesses that all contend for the lock simultaneously.
+
+    Uses a readiness barrier so the race is real: every worker finishes its
+    (slow, variable) interpreter startup and parks at a shared gate; once all
+    `count` workers are parked, the parent releases them at once. This removes
+    the startup-stagger artifact that made this test flaky (multiple non-
+    overlapping "winners"). Returns parsed result dicts (one per subprocess).
     """
     repo_root = str(Path(__file__).resolve().parent.parent / "src")
-    script = WORKER_SCRIPT.format(repo_root=repo_root, corpus=str(corpus))
+    gate = Path(tempfile.mkdtemp(prefix="xsensai-gate-"))
+    go_file = gate / "go"
+    script = WORKER_SCRIPT.format(
+        repo_root=repo_root,
+        corpus=str(corpus),
+        gate=str(gate),
+        gate_deadline=GATE_DEADLINE_S,
+        gate_poll=GATE_POLL_S,
+        hold=LOCK_HOLD_S,
+    )
 
     procs = []
     for _ in range(count):
@@ -71,13 +120,66 @@ def _spawn_workers(corpus: Path, count: int) -> list[dict]:
         )
         procs.append(p)
 
-    results = []
-    for p in procs:
-        stdout, stderr = p.communicate(timeout=10)
-        if p.returncode != 0:
-            print(f"worker stderr: {stderr.decode()}", file=sys.stderr)
-        results.append(json.loads(stdout.decode().strip()))
-    return results
+    try:
+        # Wait until every worker has cleared imports and is parked at the gate.
+        deadline = time.monotonic() + GATE_DEADLINE_S
+        parked = 0
+        while time.monotonic() < deadline:
+            parked = len(list(gate.glob("ready.*")))
+            if parked >= count:
+                break
+            time.sleep(READY_POLL_S)
+        # Fail loud if the barrier never synchronized. Touching `go` anyway would
+        # silently degrade to the startup-stagger race this barrier exists to
+        # remove, yielding a FALSE "multiple winners" failure that reads as a
+        # lock bug. A clear message here is correctly attributed to the harness.
+        if parked < count:
+            raise AssertionError(
+                f"lock barrier failed to synchronize: only {parked}/{count} "
+                f"workers parked within {GATE_DEADLINE_S}s (loaded runner?). "
+                "Rerun — this is a harness setup issue, not a lock failure."
+            )
+        # Release all workers at the same instant.
+        go_file.touch()
+
+        results = []
+        for p in procs:
+            try:
+                stdout, stderr = p.communicate(timeout=COMMUNICATE_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                p.kill()
+                stdout, stderr = p.communicate()
+            text = stdout.decode().strip()
+            if not text:
+                # Empty stdout = the worker crashed before printing (e.g. an
+                # import/lock regression). Surface its stderr instead of letting
+                # json.loads raise a cryptic JSONDecodeError that hides the cause.
+                raise AssertionError(
+                    f"worker pid={p.pid} produced no output "
+                    f"(returncode={p.returncode}). stderr:\n{stderr.decode()}"
+                )
+            results.append(json.loads(text))
+        # A worker that gave up waiting for `go` ran outside the barrier, so its
+        # result can't prove the uniqueness property — fail rather than trust it.
+        timed_out = [r["pid"] for r in results if r.get("gate_timeout")]
+        if timed_out:
+            raise AssertionError(
+                f"workers {timed_out} hit the {GATE_DEADLINE_S}s gate deadline "
+                "and contended unsynchronized. Rerun — harness setup issue."
+            )
+        return results
+    finally:
+        # Reap any still-running workers before deleting the gate so a timeout
+        # or an assertion above can't leak subprocesses that still hold the flock.
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+        for p in procs:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        shutil.rmtree(gate, ignore_errors=True)
 
 
 @pytest.fixture

@@ -23,6 +23,14 @@ concurrency:
   group: xsensai-sync
   cancel-in-progress: false
 
+# Opt JS actions onto Node 24 now, ahead of GitHub forcing it 2026-06-16 (Node
+# 20 is removed 2026-09-16). GitHub's documented opt-in; it may not fully
+# suppress the deprecation warning (actions/runner#4295) but keeps the
+# SHA-pinned action versions (supply-chain defense) intact. Dependabot can bump
+# the pins to the Node-24 majors later. Safe no-op once Node 24 is the default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 # Defense: minimum scopes. Workflow doesn't need write to this repo —
 # all writes go to the vault repo via the deploy key.
 permissions:

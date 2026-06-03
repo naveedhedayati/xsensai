@@ -9,6 +9,13 @@ on:
     # concurrency tests against real subprocess fanout. 09:00 UTC daily.
     - cron: "0 9 * * *"
 
+# Opt JS actions onto Node 24 now, ahead of GitHub forcing it 2026-06-16 (Node
+# 20 is removed 2026-09-16). GitHub's documented opt-in; it may not fully
+# suppress the deprecation warning (actions/runner#4295) but moves the runtime
+# forward without bumping the action versions. Safe no-op once Node 24 default.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   test:
     runs-on: ubuntu-latest
