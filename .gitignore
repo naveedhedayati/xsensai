@@ -39,3 +39,10 @@ env/
 
 # Repo-local artifact: gstack/autoplan deploy reports
 .gstack/
+
+# Author-internal planning artifacts + working plan docs (never committed —
+# they reference author paths/slugs; CHANGELOG.md preserves shipped history).
+dev-notes/
+TEST_PLAN.md
+*_READINESS_PLAN.md
+LAUNCH_PLAN.md

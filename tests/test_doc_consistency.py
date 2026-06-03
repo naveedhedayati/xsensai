@@ -17,6 +17,7 @@ PROJECT_ROOT = Path(__file__).parent.parent
 
 DOC_FILES = {
     "CLAUDE.md": PROJECT_ROOT / "CLAUDE.md",
+    "AGENTS.md": PROJECT_ROOT / "AGENTS.md",
     "README.md": PROJECT_ROOT / "README.md",
     "TROUBLESHOOTING.md": PROJECT_ROOT / "TROUBLESHOOTING.md",
     "CHANGELOG.md": PROJECT_ROOT / "CHANGELOG.md",
@@ -173,6 +174,14 @@ def test_troubleshooting_covers_slice_7_codes(docs):
         "NONCE_OPERATION_MISMATCH",
         "NONCE_ALREADY_REDEEMED",
     ]:
+        assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
+
+
+def test_troubleshooting_covers_repo_readiness_codes(docs):
+    """PR-1/PR-2 error codes must be documented in TROUBLESHOOTING (README points
+    users there as the error catalog)."""
+    troubleshooting = docs["TROUBLESHOOTING.md"]
+    for code in ["QMD_NOT_FOUND", "UNSUPPORTED_PLATFORM"]:
         assert code in troubleshooting, f"TROUBLESHOOTING.md missing entry for {code}"
 
 

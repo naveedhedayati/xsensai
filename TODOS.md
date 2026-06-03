@@ -111,6 +111,17 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 
 ## CI / infra
 
+### Verify cron self-rotation end-to-end (post-v0.9.2.0 PAT setup)
+
+**Priority:** P1 (the actual P0-closure proof — code shipped, real-world rotation not yet observed)
+**Origin:** v0.9.2.0 (PR #14) shipped cron self-rotation but the fix only takes effect once the `XSENSAI_SECRETS_PAT` fine-grained PAT is configured. All offline tests pass; the live rotation loop has NOT been observed end-to-end (the last 6 scheduled cron runs pre-fix all died `AUTH_FAILED`).
+**Description:** After setting the PAT (Settings → Developer settings → Fine-grained tokens, this repo only, `Secrets: Read and write`; `gh secret set XSENSAI_SECRETS_PAT --app actions`):
+1. `gh workflow run sync.yml` → confirm exit 0 + heartbeat `last_cron_success` populated + `consecutive_cron_failures: 0`.
+2. Trigger a SECOND run (manual or wait for schedule) → confirm it ALSO succeeds. This is the real proof: run N rotated the token and run N+1 used the persisted value instead of dying `AUTH_FAILED`. That two-run survival is exactly what was broken.
+3. Confirm no `SYNC_TOKEN_PERSIST_FAILED.md` / `SYNC_AUTH_FAILED.md` flag appears in the vault.
+Close this TODO once two consecutive cron runs succeed. If `--check` fatals on missing PAT, that's the intended loud failure, not a regression.
+**Files:** [.github/workflows/sync.yml](.github/workflows/sync.yml), [docs/CRON_SETUP.md](docs/CRON_SETUP.md#token-rotation), [src/xsensai/entrypoints/headless.py](src/xsensai/entrypoints/headless.py)
+
 ### Re-evaluate concurrency tests on default CI lane
 
 **Priority:** P3
@@ -120,10 +131,10 @@ Project work organized by skill/component, then by priority (P0 = blocker throug
 
 ### Unify `VERSION` and `pyproject.toml` as single source of truth
 
-**Priority:** P3
-**Origin:** Slice 7.5 /review F7 (caught `pyproject.toml` stale at 0.7.0.0 — pre-existing drift since Slice 7) + /plan-eng-review on v0.9.1.0 (caught it would drift again every release without a structural fix).
-**Description:** `pyproject.toml` currently hardcodes `version = "..."` independently from the `VERSION` file. Each release someone has to remember to bump both. Standard fix: `pyproject.toml` reads version dynamically — `dynamic = ["version"]` + `[tool.setuptools.dynamic] version = {file = "VERSION"}` is the simpler change (no new build-time dep). Add 1 doc-consistency test asserting the two stay in sync. ~1 hr work.
-**Files:** [pyproject.toml](pyproject.toml), [VERSION](VERSION), [tests/test_doc_consistency.py](tests/test_doc_consistency.py)
+**Priority:** P3 (bumped relevance — confirmed THREE sources during the v0.9.2.0 ship)
+**Origin:** Slice 7.5 /review F7 (caught `pyproject.toml` stale at 0.7.0.0 — pre-existing drift since Slice 7) + /plan-eng-review on v0.9.1.0 (caught it would drift again every release without a structural fix). **Update 2026-06-02 (v0.9.2.0 ship):** there are actually **three** hardcoded version sources, not two — `VERSION`, `pyproject.toml`, and `src/xsensai/_version.py`. The `test_version_sources_agree` guard caught the third mid-ship (it failed CI-locally after only two were bumped), so drift is de-risked, but every release still bumps three files by hand.
+**Description:** Make `VERSION` the single source of truth: `pyproject.toml` reads it dynamically (`dynamic = ["version"]` + `[tool.setuptools.dynamic] version = {file = "VERSION"}`, no new build-time dep), and `src/xsensai/_version.py` reads it at import (e.g. `__version__ = (Path(__file__)... / "VERSION").read_text().strip()` with a packaged-data fallback). Keep `test_version_sources_agree` as the backstop. ~1 hr work.
+**Files:** [pyproject.toml](pyproject.toml), [VERSION](VERSION), [src/xsensai/_version.py](src/xsensai/_version.py), [tests/test_doc_consistency.py](tests/test_doc_consistency.py)
 
 ### ~~Cron token-rotation architectural gap — RT exhausted after first successful run~~ — CLOSED (v0.9.2.0)
 

@@ -76,7 +76,7 @@ fallback if the venv has no pip. NEXT STEPS message is slice-agnostic.
 .venv/bin/python -c "
 from xsensai.storage.corpus import iter_cards_metadata
 import os
-os.environ['XSENSAI_CORPUS_PATH'] = os.path.expanduser('~/Documents/Vault/04_areas/x-bookmarks/')
+os.environ['XSENSAI_CORPUS_PATH'] = os.path.expanduser('~/path/to/your/vault/x-bookmarks/')
 n = sum(1 for _ in iter_cards_metadata())
 print(f'Loaded {n} cards from real corpus')
 "
@@ -265,7 +265,7 @@ cards on disk.
 
 ### G25. `_skip-list.txt` honors permanent-skip
 
-Manually create `~/Documents/Vault/04_areas/x-bookmarks/_skip-list.txt`
+Manually create `$XSENSAI_CORPUS_PATH/_skip-list.txt`
 with one source_id per line that you want to permanently skip.
 
 (Note: Slice 4 ships the spec for `_skip-list.txt` but the integration
@@ -295,7 +295,7 @@ no sensitive content captured.
 ### G28. `_sync-status.md` is committed (NOT gitignored)
 
 ```bash
-cd ~/Documents/Vault/04_areas/x-bookmarks/
+cd "$XSENSAI_CORPUS_PATH"
 cat .gitignore 2>/dev/null | grep -q "_sync-status" && echo "FAIL: gitignored" || echo "OK: tracked"
 ```
 

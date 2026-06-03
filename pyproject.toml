@@ -4,12 +4,26 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xsensai"
-version = "0.9.2.0"
+version = "0.9.3.0"
 description = "Personal X bookmark retrieval skill - MCP server + slash commands for Claude"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Naveed Hedayati" }]
 license = { text = "MIT" }
+keywords = [
+    "mcp", "model-context-protocol", "claude-code", "obsidian",
+    "twitter-bookmarks", "x-bookmarks", "bm25",
+    "personal-knowledge-management", "second-brain", "macos",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Utilities",
+]
 
 dependencies = [
     "mcp>=1.0",
@@ -28,6 +42,11 @@ dev = [
 [project.scripts]
 xsensai-mcp = "xsensai.mcp_server.__main__:main"
 xsensai-eval-history = "xsensai.cli.eval_history:main"
+
+[project.urls]
+Homepage = "https://github.com/naveedhedayati/xsensai"
+Repository = "https://github.com/naveedhedayati/xsensai"
+Changelog = "https://github.com/naveedhedayati/xsensai/blob/main/CHANGELOG.md"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

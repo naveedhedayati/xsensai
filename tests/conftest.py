@@ -5,8 +5,21 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
 import pytest
+
+
+def resolve_qmd_for_tests() -> Optional[str]:
+    """Resolve the qmd binary for tests: $XSENSAI_QMD_PATH → `qmd` on $PATH.
+
+    Returns None when qmd cannot be located, so integration tests can
+    `pytest.skip(...)` instead of hardcoding an author-specific path.
+    """
+    env = os.environ.get("XSENSAI_QMD_PATH")
+    if env and Path(env).exists():
+        return env
+    return shutil.which("qmd")
 
 
 @pytest.fixture
@@ -34,8 +47,7 @@ def qmd_available() -> bool:
     Used by tests that gate themselves on real QMD availability:
         @pytest.mark.skipif(not qmd_available(), reason="QMD not installed")
     """
-    qmd_path = os.environ.get("XSENSAI_QMD_PATH", "/Users/naveedhedayati/.bun/bin/qmd")
-    return shutil.which("qmd") is not None or Path(qmd_path).exists()
+    return resolve_qmd_for_tests() is not None
 
 
 @pytest.fixture

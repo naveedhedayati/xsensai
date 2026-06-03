@@ -9,11 +9,30 @@ Keyed by error code. Every error in x-sensai routes through `XSensaiError.format
 **Cause:** the corpus directory is missing, empty, or not a directory.
 
 **Fix:**
-1. Check `$XSENSAI_CORPUS_PATH` (defaults to `~/Documents/Vault/04_areas/x-bookmarks/`).
+1. Check `$XSENSAI_CORPUS_PATH` (defaults to `~/.local/share/xsensai/corpus`).
 2. Make sure the directory exists and contains `.md` files.
 3. Run `scripts/bootstrap_qmd.sh` to (re-)create the QMD index pointed at it.
 
 If you have v1 cards in there, the v1 adapter loads them automatically (no action needed). If you have no cards yet, wait for Slice 6 migration or `/xpaste` (Slice 2).
+
+---
+
+## `[QMD_NOT_FOUND]`
+
+**Cause:** the `qmd` binary could not be located or executed — it isn't on `$PATH`, `$XSENSAI_QMD_PATH` is unset or points at a missing / non-executable file / a directory.
+
+**Fix:**
+1. Install QMD: `bun install -g qmd`, then confirm `which qmd`.
+2. Or set `$XSENSAI_QMD_PATH` to your installed binary (an executable file, not a directory).
+3. Re-run your search.
+
+---
+
+## `[UNSUPPORTED_PLATFORM]`
+
+**Cause:** you ran `./scripts/setup.sh` (a setup/mutation flow) on a non-macOS platform. x-sensai is macOS-only — it uses the macOS Keychain for secrets and `F_FULLFSYNC` for crash-safe writes.
+
+**Fix:** run x-sensai on macOS. (`./scripts/setup.sh --preflight` is the one flow that runs anywhere, so you can still check prerequisites from CI/Linux.)
 
 ---
 
@@ -30,11 +49,10 @@ If you have v1 cards in there, the v1 adapter loads them automatically (no actio
 
 ## `[INTERNAL_ERROR]`
 
-**Cause:** something broke in the QMD subprocess wrapper or JSON parser.
+**Cause:** something broke in the QMD subprocess wrapper or JSON parser. (A *missing* qmd binary now raises `[QMD_NOT_FOUND]`, above — `[INTERNAL_ERROR]` is for an installed qmd that misbehaves.)
 
 **Fix:**
-1. Check QMD is installed: `which qmd` or `$XSENSAI_QMD_PATH`. Install with `bun install -g qmd`.
-2. Check QMD index health: `qmd status`.
+1. Check QMD index health: `qmd status`.
 3. If `details` mention "schema drift" or "non-JSON output", QMD updated its CLI shape. Re-spike: `qmd search "test" --json -c xsensai-cards | head` and update `tests/fixtures/qmd_query_output.json` + the parser in `src/xsensai/retrieval/qmd.py`.
 4. If it's a timeout (QMD didn't respond in 10s), re-run /xfind. If it persists, the index may be huge or stuck — `qmd status` to investigate.
 

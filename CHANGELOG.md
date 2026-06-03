@@ -2,6 +2,54 @@
 
 All notable changes to x-sensai are recorded here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), 4-digit semver `MAJOR.MINOR.PATCH.MICRO`.
 
+## [0.9.3.0] - 2026-06-03
+
+Repo-readiness pass: de-personalizes the codebase so anyone can fork and run it,
+and adds a host-agnostic `/xask` path so the tool works from **Codex** (or any
+MCP host), not just Claude Code. Went through the full gstack pipeline this
+session — `/autoplan` (CEO + Eng + DX dual-voice review, which reframed the
+scope), `/review` (Claude + Codex adversarial, which caught a P1 in the
+`setup.sh` fix before merge).
+
+### Added
+
+- **`xask_prepare` / `xask_validate` MCP tools** — the "works in Codex" floor. A
+  Codex (MCP-only) user could not reach `/xask`'s cited answer before; now
+  `xask_prepare` returns the synthesis prompt + the three validator flags
+  (`web_attempted` / `challenge_used` / `challenge_found_dissenter`) and a
+  driving loop in its docstring, and `xask_validate` structurally checks the
+  host's draft. No server-side LLM — the host agent still does the synthesis.
+- **`AGENTS.md`** (canonical agent entry guide for Codex + Claude Code) and
+  **`docs/ARCHITECTURE.md`** (shared design source); a committed `.mcp.json` for
+  zero-step Claude Code registration.
+- **`QMD_NOT_FOUND` and `UNSUPPORTED_PLATFORM` error codes** + TROUBLESHOOTING
+  entries; a `tests/test_fork_hygiene.py` guard that fails CI if any author
+  path/slug leaks into the tracked tree.
+- `pyproject.toml` `[project.urls]` + keywords + macOS classifier.
+
+### Changed
+
+- **De-defaulted the author's machine paths.** `corpus.py` now defaults to a
+  neutral `~/.local/share/xsensai/corpus` (auto-created only when the env var is
+  unset); `qmd.py` resolves `$XSENSAI_QMD_PATH` → `which("qmd")` instead of a
+  hardcoded `.bun` path. Swept author paths/slugs out of `commands/`, `server.py`
+  docstrings, `bootstrap_qmd.sh`, `sync.yml`, the docs, and the test fixtures.
+- **Rewrote `CLAUDE.md`** into a clean, dual-audience guide (dropped the private
+  spec path, plan pointers, and slice archaeology).
+- **`[P]` reference marker** is documented as "(pasted)" to match the code
+  (`format.py` emits it for paste cards, not pins).
+
+### Fixed
+
+- **`./scripts/setup.sh` no longer crashes** on a bare invocation (was an
+  argparse mutually-exclusive-required error) — and bare invocation now prints
+  help + exits non-zero instead of silently running the full `--all` flow
+  (OAuth + GitHub mutations + `migrate --apply`), a P1 the adversarial review
+  caught. A macOS-only step-0 guard fails loud on non-Darwin for setup/mutation
+  flows while `--preflight` still runs anywhere (keeps Linux CI green).
+- Removed the leaking `spike-7-deploy-key-test.yml` workflow and relocated the
+  author's `SLICE_*` planning docs out of the tracked tree.
+
 ## [0.9.2.0] - 2026-06-02
 
 Closes the P0 cron token-rotation gap: the scheduled GitHub Actions sync now

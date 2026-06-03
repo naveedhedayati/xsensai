@@ -86,7 +86,10 @@ def qmd_test_collection(cards_fixture_dir: Path):
     if not _INTEGRATION:
         pytest.skip("XSENSAI_RUN_INTEGRATION not set")
     import subprocess
-    qmd_bin = os.environ.get("XSENSAI_QMD_PATH", "/Users/naveedhedayati/.bun/bin/qmd")
+    import shutil
+    qmd_bin = os.environ.get("XSENSAI_QMD_PATH") or shutil.which("qmd")
+    if not qmd_bin:
+        pytest.skip("qmd binary not found ($XSENSAI_QMD_PATH / PATH)")
     subprocess.run(
         [qmd_bin, "collection", "remove", "xsensai-test"],
         capture_output=True, check=False,

@@ -92,13 +92,12 @@ def cmd_preflight(state: Dict[str, Any]) -> int:
     # ssh-keygen
     if not shutil.which("ssh-keygen"):
         issues.append("ssh-keygen not found (install OpenSSH)")
-    # qmd (best-effort: env var or default path)
-    qmd_path = os.environ.get(
-        "XSENSAI_QMD_PATH", "/Users/naveedhedayati/.bun/bin/qmd"
-    )
-    if not shutil.which("qmd") and not Path(qmd_path).exists():
+    # qmd (best-effort: $XSENSAI_QMD_PATH or `qmd` on PATH)
+    qmd_path = os.environ.get("XSENSAI_QMD_PATH")
+    if not shutil.which("qmd") and not (qmd_path and Path(qmd_path).exists()):
         issues.append(
-            f"qmd not found at {qmd_path} (run scripts/bootstrap_qmd.sh)"
+            "qmd not found on PATH (install via `bun install -g qmd`, or set "
+            "$XSENSAI_QMD_PATH)"
         )
     # git remote (origin) for the xsensai repo
     try:
@@ -486,7 +485,9 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="setup_wizard",
         description="Slice 6 guided setup wizard for x-sensai.",
     )
-    g = p.add_mutually_exclusive_group(required=True)
+    # required=False so a bare `./scripts/setup.sh` (no flag) does NOT crash
+    # with an argparse error — it falls through to the full guided flow.
+    g = p.add_mutually_exclusive_group(required=False)
     g.add_argument("--preflight", action="store_true")
     g.add_argument("--oauth", action="store_true")
     g.add_argument("--deploy-key", action="store_true")
@@ -505,7 +506,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    args = _build_parser().parse_args()
+    parser = _build_parser()
+    args = parser.parse_args()  # --help exits here on any platform
+
+    # macOS-only guard for the setup/mutation flows. `--preflight` is read-only
+    # and runs anywhere (so diagnostics + Linux CI work — it REPORTS environment
+    # problems rather than aborting); every other flow needs the macOS Keychain
+    # and F_FULLFSYNC, so fail loud up front instead of deep in OAuth/Keychain.
+    if sys.platform != "darwin" and not args.preflight:
+        err = XSensaiError(
+            code="UNSUPPORTED_PLATFORM",
+            cause=f"x-sensai is macOS-only; detected platform {sys.platform!r}",
+            attempted="setup_wizard (platform check)",
+            next_action=(
+                "Run x-sensai setup on macOS. It uses the macOS Keychain for secrets "
+                "and F_FULLFSYNC for crash-safe writes; Linux/Windows are not supported."
+            ),
+            retryable=False,
+        )
+        print(err.format(), file=sys.stderr)
+        return 2
+
     state = _load_state()
     if args.preflight:
         return cmd_preflight(state)
@@ -523,7 +544,13 @@ def main() -> int:
         return cmd_migrate(state, dry_run=args.migrate_dry_run)
     if args.all or args.resume:
         return cmd_all(state, args.vault_repo)
-    return 1
+    # No subcommand flag: print help and exit non-zero. We deliberately do NOT
+    # default to --all — cmd_all runs OAuth, GitHub-secret mutations, and
+    # `migrate --apply`, which must be an explicit choice, never a silent side
+    # effect of a bare `./scripts/setup.sh`. (The `required=False` argparse group
+    # is only there so a bare invocation reaches here instead of crashing.)
+    parser.print_help(sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

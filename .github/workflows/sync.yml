@@ -64,7 +64,7 @@ jobs:
           if [ -z "$VAULT_REPO_INPUT" ]; then
             echo "::error::VAULT_REPO variable is not set."
             echo "Set it via Settings → Secrets and variables → Actions → Variables → New variable."
-            echo "Format: <owner>/<repo-name> (e.g., naveedhedayati/obsidian-vault)"
+            echo "Format: <owner>/<repo-name> (e.g., your-username/your-vault-repo)"
             exit 2
           fi
 

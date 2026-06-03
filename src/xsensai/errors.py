@@ -58,6 +58,9 @@ ErrorCode = Literal[
     "FALLBACK_FIRED",
     "NO_RESULTS",
     "CORPUS_UNAVAILABLE",
+    "QMD_NOT_FOUND",
+    # Platform guard (macOS-only)
+    "UNSUPPORTED_PLATFORM",
     # /xask error states
     "WEB_FORK_FAILED",
     "EMPTY_CORPUS",
